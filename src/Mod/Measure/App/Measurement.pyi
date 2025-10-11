@@ -60,6 +60,10 @@ class Measurement(BaseClass):
         """measure the radius of an arc or circle edge"""
         ...
 
+    def diameter(self) -> Any:
+        """measure the diameter of an arc or circle edge"""
+        ...
+
     def com(self) -> Any:
         """measure the center of mass for selected volumes"""
         ...

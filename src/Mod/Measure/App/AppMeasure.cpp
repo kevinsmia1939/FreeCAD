@@ -42,6 +42,7 @@
 #include "MeasureLength.h"
 #include "MeasureArea.h"
 #include "MeasureRadius.h"
+#include "MeasureDiameter.h"
 
 namespace Measure
 {
@@ -105,6 +106,7 @@ PyMOD_INIT_FUNC(Measure)
     Measure::MeasureLength ::init();
     Measure::MeasureArea ::init();
     Measure::MeasureRadius ::init();
+    Measure::MeasureDiameter ::init();
 
     // Add fundamental umf Measure Types
 
@@ -147,6 +149,12 @@ PyMOD_INIT_FUNC(Measure)
     App::MeasureManager::addMeasureType("RADIUS",
                                         "Radius",
                                         "Measure::MeasureRadius",
+                                        MeasureRadius::isValidSelection,
+                                        MeasureRadius::isPrioritizedSelection);
+
+    App::MeasureManager::addMeasureType("DIAMETER",
+                                        "Diameter",
+                                        "Measure::MeasureDiameter",
                                         MeasureRadius::isValidSelection,
                                         MeasureRadius::isPrioritizedSelection);
 
