@@ -189,6 +189,18 @@ PyObject* MeasurementPy::radius(PyObject* args)
     return Py::new_reference_to(radius);
 }
 
+PyObject* MeasurementPy::diameter(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+
+    Py::Float diameter;
+    diameter = this->getMeasurementPtr()->diameter();
+
+    return Py::new_reference_to(diameter);
+}
+
 PyObject* MeasurementPy::angle(PyObject* args)
 {
     if (!PyArg_ParseTuple(args, "")) {

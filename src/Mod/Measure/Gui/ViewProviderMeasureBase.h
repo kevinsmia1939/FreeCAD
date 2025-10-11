@@ -241,6 +241,17 @@ public:
     }
 };
 
+class ViewProviderMeasureDiameter: public ViewProviderMeasure
+{
+    PROPERTY_HEADER(MeasureGui::ViewProviderMeasureDiameter);
+
+public:
+    ViewProviderMeasureDiameter()
+    {
+        sPixmap = "Measurement-Radius";
+    }
+};
+
 class ViewProviderMeasureCOM: public ViewProviderMeasure
 {
     PROPERTY_HEADER(MeasureGui::ViewProviderMeasureCOM);

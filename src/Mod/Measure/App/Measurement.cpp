@@ -782,33 +782,12 @@ double Measurement::radius() const
 }
 double Measurement::diameter() const
 {
-    const std::vector<App::DocumentObject*>& objects = References3D.getValues();
-    const std::vector<std::string>& subElements = References3D.getSubValues();
-
-    int numRefs = References3D.getSize();
-    if (numRefs == 0) {
+    if (References3D.getSize() == 0) {
         Base::Console().error("Measurement::diameter - No 3D references available\n");
+        return 0.0;
     }
-    else if (measureType == MeasureType::Circle) {
-        TopoDS_Shape shape = getShape(objects.at(0), subElements.at(0).c_str(), TopAbs_EDGE);
-        const TopoDS_Edge& edge = TopoDS::Edge(shape);
 
-        BRepAdaptor_Curve curve(edge);
-        if (curve.GetType() == GeomAbs_Circle) {
-            return (double)curve.Circle().Radius() * 2.0;
-        }
-    }
-    else if (measureType == MeasureType::Cylinder) {
-        TopoDS_Shape shape = getShape(objects.at(0), subElements.at(0).c_str(), TopAbs_FACE);
-        TopoDS_Face face = TopoDS::Face(shape);
-
-        BRepAdaptor_Surface sf(face);
-        if (sf.GetType() == GeomAbs_Cylinder) {
-            return sf.Cylinder().Radius() * 2.0;
-        }
-    }
-    Base::Console().error("Measurement::diameter - Invalid References3D Provided\n");
-    return 0.0;
+    return radius() * 2.0;
 }
 
 Base::Vector3d Measurement::delta() const
