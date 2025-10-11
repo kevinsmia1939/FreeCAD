@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (c) 2024 FreeCAD contributors                               *
+ *   Copyright (c) 2025 FreeCAD contributors                               *
  *                                                                         *
  *   This file is part of FreeCAD.                                         *
  *                                                                         *
