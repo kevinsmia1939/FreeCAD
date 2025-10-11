@@ -61,7 +61,7 @@ class Measurement(BaseClass):
         ...
 
     def diameter(self) -> Any:
-        """measure the diameter of a circle or cylinder"""
+        """measure the diameter of an arc or circle edge"""
         ...
 
     def com(self) -> Any:
