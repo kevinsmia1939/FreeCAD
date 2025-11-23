@@ -56,6 +56,8 @@ class MeasurePositionInfo;
 using MeasurePositionInfoPtr = std::shared_ptr<MeasurePositionInfo>;
 class MeasureRadiusInfo;
 using MeasureRadiusInfoPtr = std::shared_ptr<MeasureRadiusInfo>;
+class MeasureVolumeInfo;
+using MeasureVolumeInfoPtr = std::shared_ptr<MeasureVolumeInfo>;
 
 
 class PartExport MeasureInfo
@@ -163,6 +165,23 @@ public:
     double radius {};
     Base::Vector3d pointOnCurve;
     Base::Placement placement;  // curve center & circle orientation
+};
+
+class PartExport MeasureVolumeInfo: public MeasureInfo
+{
+public:
+    MeasureVolumeInfo() = default;
+    MeasureVolumeInfo(bool val, double vol, Base::Placement plm, std::string error)
+        : MeasureInfo(val)
+        , volume(vol)
+        , placement(plm)
+        , errorMessage(std::move(error))
+    {}
+    ~MeasureVolumeInfo() override = default;
+
+    double volume {0.0};
+    Base::Placement placement {};
+    std::string errorMessage;
 };
 
 //! callback registrations

@@ -44,6 +44,7 @@
 #include "MeasureLength.h"
 #include "MeasureArea.h"
 #include "MeasureRadius.h"
+#include "MeasureVolume.h"
 
 namespace Measure
 {
@@ -55,6 +56,7 @@ template class MeasureExport MeasureBaseExtendable<Part::MeasureDistanceInfo>;
 template class MeasureExport MeasureBaseExtendable<Part::MeasureLengthInfo>;
 template class MeasureExport MeasureBaseExtendable<Part::MeasurePositionInfo>;
 template class MeasureExport MeasureBaseExtendable<Part::MeasureRadiusInfo>;
+template class MeasureExport MeasureBaseExtendable<Part::MeasureVolumeInfo>;
 
 
 class Module: public Py::ExtensionModule<Module>
@@ -107,6 +109,7 @@ PyMOD_INIT_FUNC(Measure)
     Measure::MeasureLength ::init();
     Measure::MeasureArea ::init();
     Measure::MeasureRadius ::init();
+    Measure::MeasureVolume ::init();
 
     // Add fundamental umf Measure Types
 
@@ -166,6 +169,14 @@ PyMOD_INIT_FUNC(Measure)
         MeasureRadius::isPrioritizedSelection
     );
 
+    App::MeasureManager::addMeasureType(
+        "VOLUME",
+        "Volume",
+        "Measure::MeasureVolume",
+        MeasureVolume::isValidSelection,
+        nullptr
+    );
+
     // load measure callbacks from Part module
     auto lengthList = Part::MeasureClient::reportLengthCB();
     for (auto& entry : lengthList) {
@@ -209,6 +220,11 @@ PyMOD_INIT_FUNC(Measure)
             entry.m_callback
         );
     }
+
+    MeasureBaseExtendable<Part::MeasureVolumeInfo>::addGeometryHandlers(
+        {"Part", "PartDesign", "Mesh"},
+        Measure::makeVolumeInfo
+    );
 
 
     Base::Console().log("Loading Measure module… done\n");
