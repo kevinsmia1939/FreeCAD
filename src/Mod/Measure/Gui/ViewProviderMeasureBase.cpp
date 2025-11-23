@@ -743,3 +743,4 @@ PROPERTY_SOURCE(MeasureGui::ViewProviderMeasureLength, MeasureGui::ViewProviderM
 PROPERTY_SOURCE(MeasureGui::ViewProviderMeasurePosition, MeasureGui::ViewProviderMeasure)
 PROPERTY_SOURCE(MeasureGui::ViewProviderMeasureRadius, MeasureGui::ViewProviderMeasure)
 PROPERTY_SOURCE(MeasureGui::ViewProviderMeasureCOM, MeasureGui::ViewProviderMeasure)
+PROPERTY_SOURCE(MeasureGui::ViewProviderMeasureVolume, MeasureGui::ViewProviderMeasure)

@@ -2,6 +2,7 @@
 
 set(Measure_LIBS
     Part
+    Mesh
     FreeCADApp
 )
 
@@ -40,6 +41,8 @@ SET(MeasureModule_SRCS
     MeasureArea.h
     MeasureRadius.cpp
     MeasureRadius.h
+    MeasureVolume.cpp
+    MeasureVolume.h
 
     Preferences.cpp
     Preferences.h
