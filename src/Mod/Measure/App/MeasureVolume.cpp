@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 /***************************************************************************
- *   Copyright (c) 2024 FreeCAD Project                                   *
+ *   Copyright (c) 2025 Kavin Teenakul <andythe_great@protonmail.com>      *
  *                                                                         *
  *   This file is part of FreeCAD.                                         *
  *                                                                         *

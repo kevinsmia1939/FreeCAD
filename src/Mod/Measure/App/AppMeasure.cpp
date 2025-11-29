@@ -115,7 +115,7 @@ PyMOD_INIT_FUNC(Measure)
 
     App::MeasureManager::addMeasureType(
         "DISTANCE",
-        "Distance",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Distance"),
         "Measure::MeasureDistance",
         MeasureDistance::isValidSelection,
         MeasureDistance::isPrioritizedSelection
@@ -123,7 +123,7 @@ PyMOD_INIT_FUNC(Measure)
 
     App::MeasureManager::addMeasureType(
         "DISTANCEFREE",
-        "Distance Free",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Distance Free"),
         "Measure::MeasureDistanceDetached",
         MeasureDistanceDetached::isValidSelection,
         nullptr
@@ -131,7 +131,7 @@ PyMOD_INIT_FUNC(Measure)
 
     App::MeasureManager::addMeasureType(
         "ANGLE",
-        "Angle",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Angle"),
         "Measure::MeasureAngle",
         MeasureAngle::isValidSelection,
         MeasureAngle::isPrioritizedSelection
@@ -139,7 +139,7 @@ PyMOD_INIT_FUNC(Measure)
 
     App::MeasureManager::addMeasureType(
         "LENGTH",
-        "Length",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Length"),
         "Measure::MeasureLength",
         MeasureLength::isValidSelection,
         nullptr
@@ -147,7 +147,7 @@ PyMOD_INIT_FUNC(Measure)
 
     App::MeasureManager::addMeasureType(
         "POSITION",
-        "Position",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Position"),
         "Measure::MeasurePosition",
         MeasurePosition::isValidSelection,
         nullptr
@@ -155,12 +155,13 @@ PyMOD_INIT_FUNC(Measure)
 
     App::MeasureManager::addMeasureType(
         "AREA",
-        "Area",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Area"),
         "Measure::MeasureArea",
         MeasureArea::isValidSelection,
         nullptr
     );
 
+<<<<<<< HEAD
     App::MeasureManager::addMeasureType(
         "RADIUS",
         "Radius",
@@ -176,6 +177,15 @@ PyMOD_INIT_FUNC(Measure)
         MeasureVolume::isValidSelection,
         nullptr
     );
+=======
+    App::MeasureManager::addMeasureType(
+        "RADIUS",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Radius"),
+        "Measure::MeasureRadius",
+        MeasureRadius::isValidSelection,
+        MeasureRadius::isPrioritizedSelection
+    );
+>>>>>>> upstream/main
 
     // load measure callbacks from Part module
     auto lengthList = Part::MeasureClient::reportLengthCB();
