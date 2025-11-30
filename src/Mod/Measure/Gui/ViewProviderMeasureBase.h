@@ -256,6 +256,17 @@ public:
     }
 };
 
+class ViewProviderMeasureVolume: public ViewProviderMeasure
+{
+    PROPERTY_HEADER(MeasureGui::ViewProviderMeasureVolume);
+
+public:
+    ViewProviderMeasureVolume()
+    {
+        sPixmap = "Measurement-Volume";
+    }
+};
+
 
 }  // namespace MeasureGui
 
