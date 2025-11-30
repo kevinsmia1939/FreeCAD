@@ -200,7 +200,9 @@ void MeasureVolume::parseSelection(const App::MeasureSelection& selection)
     for (auto element : selection) {
         auto objT = element.object;
         objects.push_back(objT.getObject());
-        subElements.push_back(objT.getSubName());
+
+        const char* subName = objT.getSubName();
+        subElements.emplace_back(subName ? subName : "");
     }
 
     Elements.setValues(objects, subElements);

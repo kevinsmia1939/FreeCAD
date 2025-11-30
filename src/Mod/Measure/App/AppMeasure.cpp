@@ -177,6 +177,14 @@ PyMOD_INIT_FUNC(Measure)
         nullptr
     );
 
+    App::MeasureManager::addMeasureType(
+        "VOLUME",
+        "Volume",
+        "Measure::MeasureVolume",
+        MeasureVolume::isValidSelection,
+        nullptr
+    );
+
     // load measure callbacks from Part module
     auto lengthList = Part::MeasureClient::reportLengthCB();
     for (auto& entry : lengthList) {
