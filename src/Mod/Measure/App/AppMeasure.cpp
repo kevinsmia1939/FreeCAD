@@ -161,23 +161,14 @@ PyMOD_INIT_FUNC(Measure)
         nullptr
     );
 
-<<<<<<< HEAD
-    App::MeasureManager::addMeasureType(
-        "RADIUS",
-        "Radius",
-        "Measure::MeasureRadius",
-        MeasureRadius::isValidSelection,
-        MeasureRadius::isPrioritizedSelection
-    );
-
     App::MeasureManager::addMeasureType(
         "VOLUME",
-        "Volume",
+        QT_TRANSLATE_NOOP("TaskMeasure", "Volume"),
         "Measure::MeasureVolume",
         MeasureVolume::isValidSelection,
         nullptr
     );
-=======
+
     App::MeasureManager::addMeasureType(
         "RADIUS",
         QT_TRANSLATE_NOOP("TaskMeasure", "Radius"),
@@ -185,7 +176,6 @@ PyMOD_INIT_FUNC(Measure)
         MeasureRadius::isValidSelection,
         MeasureRadius::isPrioritizedSelection
     );
->>>>>>> upstream/main
 
     // load measure callbacks from Part module
     auto lengthList = Part::MeasureClient::reportLengthCB();
