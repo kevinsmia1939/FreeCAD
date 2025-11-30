@@ -126,7 +126,7 @@ Part::MeasureInfoPtr measureVolumeFromPart(const App::SubObjectT& subject)
 
 Part::MeasureInfoPtr measureVolumeFromMesh(const App::SubObjectT& subject)
 {
-    auto meshFeature = Base::freecad_dynamic_cast<Mesh::Feature*>(subject.getObject());
+    auto meshFeature = dynamic_cast<Mesh::Feature*>(subject.getObject());
     if (!meshFeature) {
         return std::make_shared<Part::MeasureVolumeInfo>(false, 0.0, Base::Placement(), "");
     }
@@ -263,7 +263,7 @@ std::vector<App::DocumentObject*> MeasureVolume::getSubject() const
     std::vector<App::DocumentObject*> subjects;
 
     for (auto obj : Elements.getValues()) {
-        if (auto geoObj = Base::freecad_dynamic_cast<App::GeoFeature*>(obj)) {
+        if (auto geoObj = dynamic_cast<App::GeoFeature*>(obj)) {
             subjects.push_back(geoObj);
         }
     }

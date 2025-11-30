@@ -162,19 +162,19 @@ PyMOD_INIT_FUNC(Measure)
     );
 
     App::MeasureManager::addMeasureType(
-        "VOLUME",
-        QT_TRANSLATE_NOOP("TaskMeasure", "Volume"),
-        "Measure::MeasureVolume",
-        MeasureVolume::isValidSelection,
-        nullptr
-    );
-
-    App::MeasureManager::addMeasureType(
         "RADIUS",
-        QT_TRANSLATE_NOOP("TaskMeasure", "Radius"),
+        "Radius",
         "Measure::MeasureRadius",
         MeasureRadius::isValidSelection,
         MeasureRadius::isPrioritizedSelection
+    );
+
+    App::MeasureManager::addMeasureType(
+        "VOLUME",
+        "Volume",
+        "Measure::MeasureVolume",
+        MeasureVolume::isValidSelection,
+        nullptr
     );
 
     // load measure callbacks from Part module

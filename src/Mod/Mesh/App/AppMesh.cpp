@@ -79,7 +79,7 @@ PyMOD_INIT_FUNC(Mesh)
 
     // This registration is sufficient to allow one to measure free distances with a mesh
     App::MeasureManager::addMeasureHandler("Mesh", [](App::DocumentObject* obj, const char*) {
-        auto mesh = Base::freecad_dynamic_cast<Mesh::Feature*>(obj);
+        auto mesh = dynamic_cast<Mesh::Feature*>(obj);
         if (mesh) {
             return App::MeasureElementType::VOLUME;
         }
