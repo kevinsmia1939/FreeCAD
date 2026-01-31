@@ -123,6 +123,25 @@ static QString safeQuantityQString(Gui::QuantitySpinBox* qs)
     return QString::fromStdString(qs->value().getSafeUserString());
 }
 
+static QString boxPlacementString(const QString& placement, const Ui_DlgPrimitives* ui)
+{
+    if (!ui->boxCenterOnOrigin->isChecked()) {
+        return placement;
+    }
+
+    const double halfLength = ui->boxLength->value().getValue() * 0.5;
+    const double halfWidth = ui->boxWidth->value().getValue() * 0.5;
+    const double halfHeight = ui->boxHeight->value().getValue() * 0.5;
+
+    return QStringLiteral(
+               "App.Placement((%1).Base - (%1).Rotation.multVec(App.Vector(%2,%3,%4)), (%1).Rotation)"
+    )
+        .arg(placement)
+        .arg(halfLength, 0, 'g', Base::UnitsApi::getDecimals())
+        .arg(halfWidth, 0, 'g', Base::UnitsApi::getDecimals())
+        .arg(halfHeight, 0, 'g', Base::UnitsApi::getDecimals());
+}
+
 void Picker::createPrimitive(QWidget* widget, const QString& descr, Gui::Document* doc)
 {
     try {
@@ -375,6 +394,7 @@ const char* BoxPrimitive::getDefaultName() const
 
 QString BoxPrimitive::create(const QString& objectName, const QString& placement) const
 {
+    const QString adjustedPlacement = boxPlacementString(placement, ui.get());
     return QStringLiteral(
                "App.ActiveDocument.addObject(\"Part::Box\",\"%1\")\n"
                "App.ActiveDocument.%1.Length='%2'\n"
@@ -388,13 +408,14 @@ QString BoxPrimitive::create(const QString& objectName, const QString& placement
             safeQuantityQString(ui->boxLength),
             safeQuantityQString(ui->boxWidth),
             safeQuantityQString(ui->boxHeight),
-            placement,
+            adjustedPlacement,
             DlgPrimitives::tr("Box")
         );
 }
 
 QString BoxPrimitive::change(const QString& objectName, const QString& placement) const
 {
+    const QString adjustedPlacement = boxPlacementString(placement, ui.get());
     return QStringLiteral(
                "%1.Length='%2'\n"
                "%1.Width='%3'\n"
@@ -406,7 +427,7 @@ QString BoxPrimitive::change(const QString& objectName, const QString& placement
             safeQuantityQString(ui->boxLength),
             safeQuantityQString(ui->boxWidth),
             safeQuantityQString(ui->boxHeight),
-            placement
+            adjustedPlacement
         );
 }
 
