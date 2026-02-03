@@ -385,6 +385,13 @@
               </property>
              </widget>
             </item>
+            <item row="3" column="0" colspan="3">
+             <widget class="QCheckBox" name="boxCenterOnOrigin">
+              <property name="text">
+               <string>Center on origin</string>
+              </property>
+             </widget>
+            </item>
             </layout>
           </item>
          <item row="1" column="0">
@@ -2494,6 +2501,7 @@
   <tabstop>boxLength</tabstop>
   <tabstop>boxWidth</tabstop>
   <tabstop>boxHeight</tabstop>
+  <tabstop>boxCenterOnOrigin</tabstop>
   <tabstop>cylinderRadius</tabstop>
   <tabstop>cylinderHeight</tabstop>
   <tabstop>cylinderAngle</tabstop>

@@ -123,6 +123,30 @@ static QString safeQuantityQString(Gui::QuantitySpinBox* qs)
     return QString::fromStdString(qs->value().getSafeUserString());
 }
 
+static QString boxPlacementCommand(const QString& objectRef,
+                                   const QString& placement,
+                                   const Ui_DlgPrimitives* ui)
+{
+    if (!ui->boxCenterOnOrigin->isChecked()) {
+        return QStringLiteral(
+                   "%1.Placement=%2\n"
+                   "%1.setExpression('Placement.Base.x', None)\n"
+                   "%1.setExpression('Placement.Base.y', None)\n"
+                   "%1.setExpression('Placement.Base.z', None)\n"
+        )
+            .arg(objectRef, placement);
+    }
+
+    return QStringLiteral(
+               "pl = %1\n"
+               "%2.Placement = pl\n"
+               "%2.setExpression('Placement.Base.x', str(pl.Base.x) + ' - Length/2')\n"
+               "%2.setExpression('Placement.Base.y', str(pl.Base.y) + ' - Width/2')\n"
+               "%2.setExpression('Placement.Base.z', str(pl.Base.z) + ' - Height/2')\n"
+    )
+        .arg(placement, objectRef);
+}
+
 void Picker::createPrimitive(QWidget* widget, const QString& descr, Gui::Document* doc)
 {
     try {
@@ -380,7 +404,7 @@ QString BoxPrimitive::create(const QString& objectName, const QString& placement
                "App.ActiveDocument.%1.Length='%2'\n"
                "App.ActiveDocument.%1.Width='%3'\n"
                "App.ActiveDocument.%1.Height='%4'\n"
-               "App.ActiveDocument.%1.Placement=%5\n"
+               "%5"
                "App.ActiveDocument.%1.Label='%6'\n"
     )
         .arg(
@@ -388,7 +412,9 @@ QString BoxPrimitive::create(const QString& objectName, const QString& placement
             safeQuantityQString(ui->boxLength),
             safeQuantityQString(ui->boxWidth),
             safeQuantityQString(ui->boxHeight),
-            placement,
+            boxPlacementCommand(QStringLiteral("App.ActiveDocument.%1").arg(objectName),
+                                placement,
+                                ui.get()),
             DlgPrimitives::tr("Box")
         );
 }
@@ -399,14 +425,14 @@ QString BoxPrimitive::change(const QString& objectName, const QString& placement
                "%1.Length='%2'\n"
                "%1.Width='%3'\n"
                "%1.Height='%4'\n"
-               "%1.Placement=%5\n"
+               "%5"
     )
         .arg(
             objectName,
             safeQuantityQString(ui->boxLength),
             safeQuantityQString(ui->boxWidth),
             safeQuantityQString(ui->boxHeight),
-            placement
+            boxPlacementCommand(objectName, placement, ui.get())
         );
 }
 
