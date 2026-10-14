@@ -6,6 +6,7 @@
 
 #include "Feature.h"
 #include "FieldGraph.h"
+#include "SurfaceMesh.h"
 
 namespace Implicit
 {
@@ -69,10 +70,67 @@ public:
             &Module::validateFieldGraph,
             "validateFieldGraph(json) -> canonical JSON"
         );
+        add_varargs_method(
+            "tessellate",
+            &Module::tessellate,
+            "tessellate(feature, resolution=24) -> local vertices, normals, triangles, sample_count"
+        );
         initialize("Native implicit geometry primitives for FreeCAD.");
     }
 
 private:
+    Py::Object tessellate(const Py::Tuple& args)
+    {
+        if (args.size() < 1 || args.size() > 2) {
+            throw Py::TypeError("tessellate expects (feature, resolution=24)");
+        }
+        long resolution = 24;
+        if (args.size() == 2) {
+            if (!PyLong_Check(args[1].ptr()) || PyBool_Check(args[1].ptr())) {
+                throw Py::TypeError("tessellation resolution must be an integer");
+            }
+            resolution = PyLong_AsLong(args[1].ptr());
+            if (PyErr_Occurred()) {
+                throw Py::Exception();
+            }
+        }
+        if (resolution < 2 || resolution > 64) {
+            throw Py::ValueError("tessellation resolution must be between 2 and 64");
+        }
+        const Shape shape = featureFromPython(args[0].ptr())->makeShape();
+        const auto mesh = Implicit::tessellate(shape, static_cast<unsigned int>(resolution));
+        Py::List vertices;
+        Py::List normals;
+        Py::List triangles;
+        for (const auto& vertex : mesh.vertices) {
+            Py::Tuple tuple(3);
+            tuple[0] = Py::Float(vertex.x);
+            tuple[1] = Py::Float(vertex.y);
+            tuple[2] = Py::Float(vertex.z);
+            vertices.append(tuple);
+        }
+        for (const auto& normal : mesh.normals) {
+            Py::Tuple tuple(3);
+            tuple[0] = Py::Float(normal.x);
+            tuple[1] = Py::Float(normal.y);
+            tuple[2] = Py::Float(normal.z);
+            normals.append(tuple);
+        }
+        for (const auto& triangle : mesh.triangles) {
+            Py::Tuple tuple(3);
+            for (std::size_t i = 0; i < 3; ++i) {
+                tuple[i] = Py::Long(static_cast<unsigned long>(triangle[i]));
+            }
+            triangles.append(tuple);
+        }
+        Py::Dict result;
+        result["vertices"] = vertices;
+        result["normals"] = normals;
+        result["triangles"] = triangles;
+        result["sample_count"] = Py::Long(static_cast<unsigned long>(mesh.sampleCount));
+        return result;
+    }
+
     Py::Object invoke_method_varargs(void* methodDefinition, const Py::Tuple& args) override
     {
         try {

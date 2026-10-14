@@ -12,6 +12,8 @@ set(Implicit_SRCS
     FieldGraph.h
     Shape.cpp
     Shape.h
+    SurfaceMesh.cpp
+    SurfaceMesh.h
 )
 
 add_library(Implicit SHARED ${Implicit_SRCS})

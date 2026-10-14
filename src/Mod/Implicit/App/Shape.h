@@ -31,6 +31,11 @@ public:
         return domain;
     }
 
+    bool isInsideNegative() const
+    {
+        return insideNegative;
+    }
+
 private:
     FieldPtr field;
     Domain domain;
