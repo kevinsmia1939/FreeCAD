@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -35,37 +36,28 @@ struct EdgeHash
 class Extractor
 {
 public:
-    Extractor(const Shape& shape, unsigned int resolution)
+    Extractor(const Shape& shape, unsigned int resolution, bool adaptive = false)
         : shape(shape)
         , resolution(resolution)
         , width(static_cast<std::size_t>(resolution) + 1)
+        , adaptive(adaptive)
     {}
 
     SurfaceMesh run()
     {
-        samples.resize(width * width * width);
-        mesh.sampleCount = samples.size();
+        samples.resize(width * width * width, std::numeric_limits<double>::quiet_NaN());
+        if (adaptive) {
+            block(0, 0, 0, resolution);
+            return std::move(mesh);
+        }
         for (std::size_t id = 0; id < samples.size(); ++id) {
-            samples[id] = checkedValue(point(id));
+            sample(id);
         }
 
         for (std::size_t z = 0; z < resolution; ++z) {
             for (std::size_t y = 0; y < resolution; ++y) {
                 for (std::size_t x = 0; x < resolution; ++x) {
-                    const std::size_t base = z * width * width + y * width + x;
-                    const std::array<std::size_t, 8> cube {{
-                        base,
-                        base + 1,
-                        base + width + 1,
-                        base + width,
-                        base + width * width,
-                        base + width * width + 1,
-                        base + width * width + width + 1,
-                        base + width * width + width,
-                    }};
-                    for (const auto& tetrahedron : tetrahedra) {
-                        polygonise(cube, tetrahedron);
-                    }
+                    cell(x, y, z);
                 }
             }
         }
@@ -73,6 +65,65 @@ public:
     }
 
 private:
+    double sample(std::size_t id)
+    {
+        if (std::isnan(samples[id])) {
+            samples[id] = checkedValue(point(id));
+            ++mesh.sampleCount;
+        }
+        return samples[id];
+    }
+
+    void cell(std::size_t x, std::size_t y, std::size_t z)
+    {
+        const std::size_t base = z * width * width + y * width + x;
+        const std::array<std::size_t, 8> cube {
+            {base,
+             base + 1,
+             base + width + 1,
+             base + width,
+             base + width * width,
+             base + width * width + 1,
+             base + width * width + width + 1,
+             base + width * width + width}
+        };
+        for (const auto id : cube) {
+            sample(id);
+        }
+        for (const auto& tetrahedron : tetrahedra) {
+            polygonise(cube, tetrahedron);
+        }
+    }
+
+    void block(std::size_t x, std::size_t y, std::size_t z, std::size_t span)
+    {
+        if (span == 1) {
+            cell(x, y, z);
+            return;
+        }
+        const auto half = span / 2;
+        const double bound = shape.lipschitzBound();
+        if (std::isfinite(bound)) {
+            const auto center = (z + half) * width * width + (y + half) * width + x + half;
+            const auto diagonal = point((z + span) * width * width + (y + span) * width + x + span)
+                - point(z * width * width + y * width + x);
+            const double radiusBound = bound * diagonal.Length() * 0.5;
+            // A small relative margin accommodates ordinary floating-point error;
+            // this is not an interval-arithmetic proof for arbitrary coordinates.
+            if (std::abs(sample(center)) > radiusBound * (1.0 + 1.0e-12) + 1.0e-12) {
+                ++mesh.prunedBlocks;
+                return;
+            }
+        }
+        for (std::size_t dz = 0; dz < 2; ++dz) {
+            for (std::size_t dy = 0; dy < 2; ++dy) {
+                for (std::size_t dx = 0; dx < 2; ++dx) {
+                    block(x + dx * half, y + dy * half, z + dz * half, half);
+                }
+            }
+        }
+    }
+
     Base::Vector3d point(std::size_t id) const
     {
         const auto& domain = shape.getDomain();
@@ -142,13 +193,20 @@ private:
             normal /= shape.isInsideNegative() ? length : -length;
         }
         const std::size_t index = mesh.vertices.size();
+        // Preserve the linear tetrahedron's orientation even when root
+        // refinement crosses a hard field-gradient branch boundary.
+        referenceVertices.push_back(
+            key.first == key.second
+                ? point(key.first)
+                : point(a) + (point(b) - point(a)) * (samples[a] / (samples[a] - samples[b]))
+        );
         mesh.vertices.push_back(position);
         mesh.normals.push_back(normal);
         edges.emplace(key, index);
         return index;
     }
 
-    void triangle(std::size_t a, std::size_t b, std::size_t c)
+    void triangle(std::size_t a, std::size_t b, std::size_t c, const Base::Vector3d& outward)
     {
         if (a == b || b == c || c == a) {
             return;
@@ -158,7 +216,9 @@ private:
         if (normal.Sqr() == 0.0) {
             return;
         }
-        if (normal.Dot(mesh.normals[a] + mesh.normals[b] + mesh.normals[c]) < 0.0) {
+        const auto referenceNormal = (referenceVertices[b] - referenceVertices[a])
+                                         .Cross(referenceVertices[c] - referenceVertices[a]);
+        if (referenceNormal.Dot(outward) < 0.0) {
             std::swap(b, c);
         }
         if (mesh.triangles.size() >= maxMeshElements) {
@@ -185,27 +245,31 @@ private:
         if (count == 0 || count == 4) {
             return;
         }
+        const auto outward = (point(outside[0]) - point(inside[0]))
+            * (shape.isInsideNegative() ? 1.0 : -1.0);
         if (count == 1 || count == 3) {
             const auto singleton = count == 1 ? inside[0] : outside[0];
             const auto& others = count == 1 ? outside : inside;
             const auto a = vertex(singleton, others[0]);
             const auto b = vertex(singleton, others[1]);
             const auto c = vertex(singleton, others[2]);
-            triangle(a, b, c);
+            triangle(a, b, c, outward);
             return;
         }
         const auto a = vertex(inside[0], outside[0]);
         const auto b = vertex(inside[0], outside[1]);
         const auto c = vertex(inside[1], outside[0]);
         const auto d = vertex(inside[1], outside[1]);
-        triangle(a, b, c);
-        triangle(b, d, c);
+        triangle(a, b, c, outward);
+        triangle(b, d, c, outward);
     }
 
     const Shape& shape;
     unsigned int resolution;
     std::size_t width;
+    bool adaptive;
     SurfaceMesh mesh;
+    std::vector<Base::Vector3d> referenceVertices;
     std::vector<double> samples;
     std::unordered_map<Edge, std::size_t, EdgeHash> edges;
 };
@@ -218,6 +282,14 @@ SurfaceMesh tessellate(const Shape& shape, unsigned int resolution)
         throw std::invalid_argument("tessellation resolution must be between 2 and 64");
     }
     return Extractor(shape, resolution).run();
+}
+
+SurfaceMesh tessellateAdaptive(const Shape& shape, unsigned int resolution)
+{
+    if (resolution < 2 || resolution > 64 || (resolution & (resolution - 1)) != 0) {
+        throw std::invalid_argument("adaptive resolution must be a power of two between 2 and 64");
+    }
+    return Extractor(shape, resolution, true).run();
 }
 
 }  // namespace Implicit

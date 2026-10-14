@@ -60,6 +60,13 @@ Feature::Feature()
         App::Prop_ReadOnly,
         "Serialized implicit feature schema"
     );
+    ADD_PROPERTY_TYPE(
+        CacheRevision,
+        (0),
+        "Display",
+        static_cast<App::PropertyType>(App::Prop_Transient | App::Prop_Output | App::Prop_ReadOnly),
+        "Transient geometry cache revision"
+    );
 }
 
 short Feature::mustExecute() const
@@ -75,15 +82,49 @@ App::DocumentObjectExecReturn* Feature::execute()
 {
     try {
         (void)makeShape();
+        if (Function.isTouched() || Center.isTouched() || Radius.isTouched() || Period.isTouched()
+            || IsoValue.isTouched() || DomainMin.isTouched() || DomainMax.isTouched()
+            || InsideNegative.isTouched() || FieldGraph.isTouched()) {
+            displayMesh.reset();
+            CacheRevision.setValue(CacheRevision.getValue() + 1);
+        }
     }
     catch (const std::exception& error) {
+        displayMesh.reset();
+        CacheRevision.setValue(CacheRevision.getValue() + 1);
         return new App::DocumentObjectExecReturn(error.what());
     }
     return App::DocumentObject::StdReturn;
 }
 
+std::shared_ptr<const SurfaceMesh> Feature::getDisplayMesh(unsigned int resolution, bool adaptive) const
+{
+    if (resolution < 2 || resolution > 64) {
+        throw std::invalid_argument("display resolution must be between 2 and 64");
+    }
+    if (adaptive) {
+        unsigned int effective = 2;
+        while (effective < resolution) {
+            effective *= 2;
+        }
+        resolution = effective;
+    }
+    if (!displayMesh || displayResolution != resolution || displayAdaptive != adaptive) {
+        displayMesh = std::make_shared<SurfaceMesh>(
+            adaptive ? Implicit::tessellateAdaptive(makeShape(), resolution)
+                     : Implicit::tessellate(makeShape(), resolution)
+        );
+        displayResolution = resolution;
+        displayAdaptive = adaptive;
+    }
+    return displayMesh;
+}
+
 Shape Feature::makeShape() const
 {
+    if (compiledShape) {
+        return *compiledShape;
+    }
     FieldPtr field;
     const std::string serializedGraph = FieldGraph.getValue();
     if (!serializedGraph.empty()) {
@@ -95,10 +136,22 @@ Shape Feature::makeShape() const
     else {
         field = std::make_shared<SphereField>(Center.getValue(), Radius.getValue());
     }
-    return {
+    compiledShape.emplace(
         std::move(field),
-        {DomainMin.getValue(), DomainMax.getValue()},
+        Domain {DomainMin.getValue(), DomainMax.getValue()},
         Tolerance.getValue(),
         InsideNegative.getValue()
-    };
+    );
+    return *compiledShape;
+}
+
+void Feature::onChanged(const App::Property* property)
+{
+    if (property == &Function || property == &Center || property == &Radius || property == &Period
+        || property == &IsoValue || property == &DomainMin || property == &DomainMax
+        || property == &Tolerance || property == &InsideNegative || property == &FieldGraph) {
+        compiledShape.reset();
+        displayMesh.reset();
+    }
+    App::GeoFeature::onChanged(property);
 }

@@ -92,6 +92,23 @@ def main():
     assert Implicit.classify(feature, 5.0, 0.0, 0.0) == "inside"
     assert math.isclose(Implicit.evaluate(feature, 6.5, 0.0, 0.0), 0.0, abs_tol=1e-12)
     assert Implicit.gradient(feature, 6.5, 0.0, 0.0) == (1.0, 0.0, 0.0)
+    points = [(0, 0, 0), (2, 0, 0), (6.5, 0, 0)]
+    assert Implicit.evaluateBatch(feature, points) == [Implicit.evaluate(feature, *p) for p in points]
+    assert Implicit.evaluateBatch(feature, []) == []
+    for invalid in (None, [1], [(1, 2)], [(1, 2, float("nan"))], [(1, 2, "bad")]):
+        try:
+            Implicit.evaluateBatch(feature, invalid)
+        except (TypeError, ValueError):
+            pass
+        else:
+            raise AssertionError("accepted invalid batch")
+    for function in (Implicit.evaluate, Implicit.gradient, Implicit.classify):
+        try:
+            function(feature, float("nan"), 0, 0)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("accepted a non-finite query")
 
     try:
         Implicit.validateFieldGraph('{"schema":1,"root":{"type":"unknown"}}')

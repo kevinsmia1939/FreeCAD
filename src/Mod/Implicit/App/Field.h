@@ -3,6 +3,7 @@
 #pragma once
 
 #include <memory>
+#include <limits>
 
 #include <Base/Vector3D.h>
 #include <Mod/Implicit/ImplicitGlobal.h>
@@ -24,9 +25,46 @@ public:
 
     virtual double value(const Base::Vector3d& point) const = 0;
     virtual Base::Vector3d gradient(const Base::Vector3d& point) const = 0;
+    // Conservative global bound; infinity disables spatial pruning.
+    virtual double lipschitzBound() const
+    {
+        return std::numeric_limits<double>::infinity();
+    }
 };
 
 using FieldPtr = std::shared_ptr<const Field>;
+
+class ImplicitExport BoxField final: public Field
+{
+public:
+    BoxField(Base::Vector3d center, Base::Vector3d halfSize);
+    double value(const Base::Vector3d& point) const override;
+    Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override
+    {
+        return 1.0;
+    }
+
+private:
+    Base::Vector3d center;
+    Base::Vector3d halfSize;
+};
+
+class ImplicitExport BandField final: public Field
+{
+public:
+    BandField(FieldPtr field, double halfWidth);
+    double value(const Base::Vector3d& point) const override;
+    Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override
+    {
+        return field->lipschitzBound();
+    }
+
+private:
+    FieldPtr field;
+    double halfWidth;
+};
 
 class ImplicitExport SphereField final: public Field
 {
@@ -35,6 +73,10 @@ public:
 
     double value(const Base::Vector3d& point) const override;
     Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override
+    {
+        return 1.0;
+    }
 
 private:
     Base::Vector3d center;
@@ -48,6 +90,7 @@ public:
 
     double value(const Base::Vector3d& point) const override;
     Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override;
 
 private:
     double waveNumber;
@@ -68,6 +111,7 @@ public:
 
     double value(const Base::Vector3d& point) const override;
     Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override;
 
 private:
     bool selectLeft(double leftValue, double rightValue) const;
@@ -84,6 +128,10 @@ public:
 
     double value(const Base::Vector3d& point) const override;
     Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override
+    {
+        return field->lipschitzBound();
+    }
 
 private:
     FieldPtr field;
@@ -97,6 +145,10 @@ public:
 
     double value(const Base::Vector3d& point) const override;
     Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override
+    {
+        return field->lipschitzBound();
+    }
 
 private:
     FieldPtr field;

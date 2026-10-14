@@ -40,12 +40,26 @@ Shape::Shape(FieldPtr field, Domain domain, double tolerance, bool insideNegativ
 
 double Shape::value(const Base::Vector3d& point) const
 {
-    return field->value(point);
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        throw std::invalid_argument("implicit query point must be finite");
+    }
+    const double result = field->value(point);
+    if (!std::isfinite(result)) {
+        throw std::runtime_error("implicit field returned a non-finite value");
+    }
+    return result;
 }
 
 Base::Vector3d Shape::gradient(const Base::Vector3d& point) const
 {
-    return field->gradient(point);
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        throw std::invalid_argument("implicit query point must be finite");
+    }
+    const auto result = field->gradient(point);
+    if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z)) {
+        throw std::runtime_error("implicit field returned a non-finite gradient");
+    }
+    return result;
 }
 
 PointClassification Shape::classify(const Base::Vector3d& point) const

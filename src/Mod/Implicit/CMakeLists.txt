@@ -2,11 +2,15 @@
 
 add_subdirectory(App)
 
+if(BUILD_GUI)
+    add_subdirectory(Gui)
+endif()
+
 if(ENABLE_DEVELOPER_TESTS)
     add_subdirectory(Tests)
 endif()
 
-set(Implicit_Scripts Init.py)
+set(Implicit_Scripts Init.py ImplicitCommands.py)
 
 add_custom_target(ImplicitScripts ALL SOURCES ${Implicit_Scripts})
 

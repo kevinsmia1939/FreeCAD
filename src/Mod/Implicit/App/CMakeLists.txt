@@ -18,6 +18,25 @@ set(Implicit_SRCS
 
 add_library(Implicit SHARED ${Implicit_SRCS})
 
+# Build this fork's new OCCT class against the selected OCCT libraries. This
+# permits testing the extension with system OCCT without replacing system libs.
+set(IMPLICIT_OCCT_SOURCE_DIR "" CACHE PATH "OCCT fork source with signed-distance extension")
+if(IMPLICIT_OCCT_SOURCE_DIR)
+    set(_implicit_occt_dir "${IMPLICIT_OCCT_SOURCE_DIR}/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d")
+    if(NOT EXISTS "${_implicit_occt_dir}/BRepClass3d_SignedDistance.cxx")
+        message(FATAL_ERROR "OCCT fork signed-distance source missing")
+    endif()
+    target_sources(Implicit PRIVATE BRepField.cpp BRepField.h
+        "${_implicit_occt_dir}/BRepClass3d_SignedDistance.cxx")
+    configure_file("${_implicit_occt_dir}/BRepClass3d_SignedDistance.hxx"
+        "${CMAKE_CURRENT_BINARY_DIR}/occt-implicit-include/BRepClass3d_SignedDistance.hxx" COPYONLY)
+    target_include_directories(Implicit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/occt-implicit-include")
+    target_include_directories(Implicit SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
+    target_link_directories(Implicit PRIVATE ${OCC_LIBRARY_DIR})
+    target_link_libraries(Implicit ${OCC_LIBRARIES})
+    target_compile_definitions(Implicit PRIVATE IMPLICIT_WITH_OCCT_BRIDGE)
+endif()
+
 target_include_directories(Implicit PRIVATE
     ${CMAKE_BINARY_DIR}
     ${CMAKE_BINARY_DIR}/src

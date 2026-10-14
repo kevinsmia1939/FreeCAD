@@ -25,6 +25,10 @@ public:
     Base::Vector3d gradient(const Base::Vector3d& point) const;
     PointClassification classify(const Base::Vector3d& point) const;
     bool contains(const Base::Vector3d& point) const;
+    double lipschitzBound() const
+    {
+        return field->lipschitzBound();
+    }
 
     const Domain& getDomain() const
     {

@@ -10,6 +10,68 @@
 
 using namespace Implicit;
 
+BoxField::BoxField(Base::Vector3d center, Base::Vector3d halfSize)
+    : center(center)
+    , halfSize(halfSize)
+{
+    if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)
+        || !std::isfinite(halfSize.x) || !std::isfinite(halfSize.y) || !std::isfinite(halfSize.z)
+        || halfSize.x <= 0 || halfSize.y <= 0 || halfSize.z <= 0) {
+        throw std::invalid_argument("box requires a finite center and positive finite half-size");
+    }
+}
+
+double BoxField::value(const Base::Vector3d& point) const
+{
+    const auto p = point - center;
+    const Base::Vector3d q(
+        std::abs(p.x) - halfSize.x,
+        std::abs(p.y) - halfSize.y,
+        std::abs(p.z) - halfSize.z
+    );
+    return Base::Vector3d(std::max(q.x, 0.0), std::max(q.y, 0.0), std::max(q.z, 0.0)).Length()
+        + std::min(std::max({q.x, q.y, q.z}), 0.0);
+}
+
+Base::Vector3d BoxField::gradient(const Base::Vector3d& point) const
+{
+    const auto p = point - center;
+    const Base::Vector3d q(
+        std::abs(p.x) - halfSize.x,
+        std::abs(p.y) - halfSize.y,
+        std::abs(p.z) - halfSize.z
+    );
+    Base::Vector3d result(std::max(q.x, 0.0), std::max(q.y, 0.0), std::max(q.z, 0.0));
+    const auto sign = [](double value) {
+        return value < 0.0 ? -1.0 : 1.0;
+    };
+    if (const double length = result.Length(); length > 0.0) {
+        return Base::Vector3d(result.x * sign(p.x), result.y * sign(p.y), result.z * sign(p.z))
+            / length;
+    }
+    if (q.x >= q.y && q.x >= q.z) {
+        return Base::Vector3d(sign(p.x), 0, 0);
+    }
+    return q.y >= q.z ? Base::Vector3d(0, sign(p.y), 0) : Base::Vector3d(0, 0, sign(p.z));
+}
+
+BandField::BandField(FieldPtr field, double halfWidth)
+    : field(std::move(field))
+    , halfWidth(halfWidth)
+{
+    if (!this->field || !std::isfinite(halfWidth) || halfWidth <= 0) {
+        throw std::invalid_argument("band requires a field and positive finite half-width");
+    }
+}
+double BandField::value(const Base::Vector3d& point) const
+{
+    return std::abs(field->value(point)) - halfWidth;
+}
+Base::Vector3d BandField::gradient(const Base::Vector3d& point) const
+{
+    return field->value(point) < 0.0 ? -field->gradient(point) : field->gradient(point);
+}
+
 namespace
 {
 
@@ -27,8 +89,9 @@ SphereField::SphereField(Base::Vector3d center, double radius)
     : center(center)
     , radius(radius)
 {
-    if (!std::isfinite(radius) || radius <= 0.0) {
-        throw std::invalid_argument("sphere radius must be finite and positive");
+    if (!std::isfinite(radius) || radius <= 0.0 || !std::isfinite(center.x)
+        || !std::isfinite(center.y) || !std::isfinite(center.z)) {
+        throw std::invalid_argument("sphere requires a finite center and positive finite radius");
     }
 }
 
@@ -54,6 +117,16 @@ GyroidField::GyroidField(double period, double isoValue)
     if (!std::isfinite(isoValue)) {
         throw std::invalid_argument("gyroid iso value must be finite");
     }
+}
+
+double GyroidField::lipschitzBound() const
+{
+    return 2.0 * std::sqrt(3.0) * waveNumber;
+}
+
+double BooleanField::lipschitzBound() const
+{
+    return std::max(left->lipschitzBound(), right->lipschitzBound());
 }
 
 double GyroidField::value(const Base::Vector3d& point) const

@@ -27,7 +27,7 @@ def dot(a, b):
     return sum(x * y for x, y in zip(a, b))
 
 
-def check_mesh(feature, mesh, closed=False, euler=None):
+def check_mesh(feature, mesh, closed=False, euler=None, smooth=True):
     vertices, normals, triangles = (mesh[key] for key in ("vertices", "normals", "triangles"))
     assert vertices and triangles
     assert len(vertices) == len(normals)
@@ -49,7 +49,8 @@ def check_mesh(feature, mesh, closed=False, euler=None):
         assert dot(face_normal, face_normal) > 0
         mean_normal = tuple(normals[a][i] + normals[b][i] + normals[c][i]
                             for i in range(3))
-        assert dot(face_normal, mean_normal) > 0
+        if smooth:
+            assert dot(face_normal, mean_normal) > 0
         for edge in ((a, b), (b, c), (c, a)):
             edges[tuple(sorted(edge))] += 1
             oriented_edges[edge] += 1
@@ -76,6 +77,14 @@ def main():
         assert sphere["sample_count"] == 17 ** 3
         check_mesh(feature, sphere, closed=True, euler=2)
         assert sphere == Implicit.tessellate(feature, 16), "non-deterministic extraction"
+        adaptive = Implicit.tessellateAdaptive(feature, 16)
+        check_mesh(feature, adaptive, closed=True, euler=2)
+        assert adaptive["pruned_blocks"] > 0
+        assert adaptive["sample_count"] < sphere["sample_count"]
+        def geometry(mesh):
+            return {tuple(sorted(mesh["vertices"][index] for index in triangle))
+                    for triangle in mesh["triangles"]}
+        assert geometry(adaptive) == geometry(sphere)
         for point, normal in zip(sphere["vertices"], sphere["normals"]):
             assert dot(point, normal) > 0
 
@@ -115,6 +124,10 @@ def main():
         empty = Implicit.tessellate(feature)
         assert not empty["vertices"] and not empty["triangles"]
         assert empty["sample_count"] == 25 ** 3
+        empty_adaptive = Implicit.tessellateAdaptive(feature, 32)
+        assert empty_adaptive["sample_count"] == 1
+        assert empty_adaptive["pruned_blocks"] == 1
+        assert not empty_adaptive["triangles"]
 
         feature.Radius = 1
         feature.DomainMin = (-0.75, -0.75, -0.75)
@@ -130,6 +143,21 @@ def main():
         feature.DomainMax = (2, 2, 2)
         check_mesh(feature, Implicit.tessellate(feature, 12))
 
+        # The box supplies real field boundaries, unlike computational-domain
+        # clipping. A gyroid band clipped by this box should have paired edges.
+        capped = {"schema": 1, "root": {"type": "intersection",
+            "left": {"type": "band", "halfWidth": 0.3,
+                     "field": {"type": "gyroid", "period": 4, "iso": 0.17}},
+            "right": {"type": "box", "center": [0, 0, 0], "halfSize": [1.7, 1.7, 1.7]}}}
+        Implicit.setFieldGraph(feature, json.dumps(capped))
+        check_mesh(feature, Implicit.tessellate(feature, 16), closed=True, smooth=False)
+        Implicit.setFieldGraph(feature, json.dumps({"schema": 1, "root": {
+            "type": "box", "center": [0, 0, 0], "halfSize": [1, 2, 3]}}))
+        assert math.isclose(Implicit.evaluate(feature, 0, 0, 0), -1)
+        assert math.isclose(Implicit.evaluate(feature, 2, 3, 4), math.sqrt(3))
+        assert Implicit.gradient(feature, 2, 0, 0) == (1, 0, 0)
+        feature.FieldGraph = ""
+
         for invalid in (0, -1, 1, 65, 2 ** 80, 2.5, True, "24"):
             try:
                 Implicit.tessellate(feature, invalid)
@@ -137,6 +165,12 @@ def main():
                 pass
             else:
                 raise AssertionError("accepted invalid resolution: {!r}".format(invalid))
+        try:
+            Implicit.tessellateAdaptive(feature, 24)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("accepted non-power-of-two adaptive resolution")
 
         feature.DomainMax = feature.DomainMin
         try:

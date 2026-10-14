@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include "FieldGraph.h"
+#ifdef IMPLICIT_WITH_OCCT_BRIDGE
+# include "BRepField.h"
+#endif
 
 #include <cmath>
 #include <initializer_list>
@@ -83,6 +86,37 @@ FieldPtr parseNode(const Json& node, std::size_t depth, std::size_t& nodeCount)
         throw std::invalid_argument("field graph node requires a string 'type'");
     }
     const std::string type = typeIterator->get<std::string>();
+
+    if (type == "box") {
+        requireOnlyMembers(node, {"type", "center", "halfSize"});
+        return std::make_shared<BoxField>(
+            requiredVector(node, "center"),
+            requiredVector(node, "halfSize")
+        );
+    }
+    if (type == "band") {
+        requireOnlyMembers(node, {"type", "field", "halfWidth"});
+        if (!node.contains("field")) {
+            throw std::invalid_argument("band requires 'field'");
+        }
+        return std::make_shared<BandField>(
+            parseNode(node.at("field"), depth + 1, nodeCount),
+            requiredNumber(node, "halfWidth")
+        );
+    }
+
+#ifdef IMPLICIT_WITH_OCCT_BRIDGE
+    if (type == "brep") {
+        requireOnlyMembers(node, {"type", "data", "tolerance"});
+        if (!node.contains("data") || !node.at("data").is_string()) {
+            throw std::invalid_argument("B-Rep node requires a string 'data' snapshot");
+        }
+        return std::make_shared<BRepField>(
+            node.at("data").get<std::string>(),
+            requiredNumber(node, "tolerance")
+        );
+    }
+#endif
 
     if (type == "sphere") {
         requireOnlyMembers(node, {"type", "center", "radius"});

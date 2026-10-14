@@ -3,6 +3,7 @@
 #include <App/DocumentObjectPy.h>
 #include <Base/Interpreter.h>
 #include <Base/PyObjectBase.h>
+#include <cmath>
 
 #include "Feature.h"
 #include "FieldGraph.h"
@@ -29,11 +30,14 @@ Feature* featureFromPython(PyObject* object)
 
 Base::Vector3d vectorFromTuple(const Py::Tuple& args, Py_ssize_t offset)
 {
-    return Base::Vector3d(
-        PyFloat_AsDouble(args[offset].ptr()),
-        PyFloat_AsDouble(args[offset + 1].ptr()),
-        PyFloat_AsDouble(args[offset + 2].ptr())
-    );
+    double coordinates[3];
+    for (Py_ssize_t axis = 0; axis < 3; ++axis) {
+        coordinates[axis] = PyFloat_AsDouble(args[offset + axis].ptr());
+        if (PyErr_Occurred()) {
+            throw Py::Exception();
+        }
+    }
+    return Base::Vector3d(coordinates[0], coordinates[1], coordinates[2]);
 }
 
 }  // namespace
@@ -48,6 +52,11 @@ public:
             "evaluate",
             &Module::evaluate,
             "evaluate(feature, x, y, z) -> scalar field value"
+        );
+        add_varargs_method(
+            "evaluateBatch",
+            &Module::evaluateBatch,
+            "evaluateBatch(feature, points) -> scalar values in feature-local coordinates"
         );
         add_varargs_method("gradient", &Module::gradient, "gradient(feature, x, y, z) -> (dx, dy, dz)");
         add_varargs_method(
@@ -75,16 +84,73 @@ public:
             &Module::tessellate,
             "tessellate(feature, resolution=24) -> local vertices, normals, triangles, sample_count"
         );
+        add_varargs_method(
+            "tessellateAdaptive",
+            &Module::tessellateAdaptive,
+            "tessellateAdaptive(feature, resolution=32) -> mesh with conservative block pruning"
+        );
         initialize("Native implicit geometry primitives for FreeCAD.");
     }
 
 private:
+    Py::Object evaluateBatch(const Py::Tuple& args)
+    {
+        if (args.size() != 2) {
+            throw Py::TypeError("evaluateBatch expects (feature, points)");
+        }
+        const Shape shape = featureFromPython(args[0].ptr())->makeShape();
+        PyObject* rawSequence = PySequence_Fast(args[1].ptr(), "points must be a sequence");
+        if (!rawSequence) {
+            throw Py::Exception();
+        }
+        Py::Object sequence(rawSequence, true);
+        const auto count = PySequence_Fast_GET_SIZE(sequence.ptr());
+        if (count > 1000000) {
+            throw Py::ValueError("batch point budget exceeded");
+        }
+        Py::List values;
+        for (Py_ssize_t index = 0; index < count; ++index) {
+            PyObject* rawCoordinates = PySequence_Fast(
+                PySequence_Fast_GET_ITEM(sequence.ptr(), index),
+                "each point must be a sequence"
+            );
+            if (!rawCoordinates) {
+                throw Py::Exception();
+            }
+            Py::Object coordinates(rawCoordinates, true);
+            if (PySequence_Fast_GET_SIZE(coordinates.ptr()) != 3) {
+                throw Py::ValueError("each point must have three coordinates");
+            }
+            double point[3];
+            for (Py_ssize_t axis = 0; axis < 3; ++axis) {
+                point[axis] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(coordinates.ptr(), axis));
+                if (PyErr_Occurred()) {
+                    throw Py::Exception();
+                }
+                if (!std::isfinite(point[axis])) {
+                    throw Py::ValueError("point coordinates must be finite");
+                }
+            }
+            values.append(Py::Float(shape.value(Base::Vector3d(point[0], point[1], point[2]))));
+        }
+        return values;
+    }
+
     Py::Object tessellate(const Py::Tuple& args)
+    {
+        return extractMesh(args, false);
+    }
+    Py::Object tessellateAdaptive(const Py::Tuple& args)
+    {
+        return extractMesh(args, true);
+    }
+
+    Py::Object extractMesh(const Py::Tuple& args, bool adaptive)
     {
         if (args.size() < 1 || args.size() > 2) {
             throw Py::TypeError("tessellate expects (feature, resolution=24)");
         }
-        long resolution = 24;
+        long resolution = adaptive ? 32 : 24;
         if (args.size() == 2) {
             if (!PyLong_Check(args[1].ptr()) || PyBool_Check(args[1].ptr())) {
                 throw Py::TypeError("tessellation resolution must be an integer");
@@ -98,7 +164,9 @@ private:
             throw Py::ValueError("tessellation resolution must be between 2 and 64");
         }
         const Shape shape = featureFromPython(args[0].ptr())->makeShape();
-        const auto mesh = Implicit::tessellate(shape, static_cast<unsigned int>(resolution));
+        const auto mesh = adaptive
+            ? Implicit::tessellateAdaptive(shape, static_cast<unsigned int>(resolution))
+            : Implicit::tessellate(shape, static_cast<unsigned int>(resolution));
         Py::List vertices;
         Py::List normals;
         Py::List triangles;
@@ -128,6 +196,7 @@ private:
         result["normals"] = normals;
         result["triangles"] = triangles;
         result["sample_count"] = Py::Long(static_cast<unsigned long>(mesh.sampleCount));
+        result["pruned_blocks"] = Py::Long(static_cast<unsigned long>(mesh.prunedBlocks));
         return result;
     }
 
