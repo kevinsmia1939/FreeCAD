@@ -30,6 +30,10 @@ if(BUILD_IMPORT)
   add_subdirectory(Import)
 endif(BUILD_IMPORT)
 
+if(BUILD_IMPLICIT)
+  add_subdirectory(Implicit)
+endif(BUILD_IMPLICIT)
+
 if(BUILD_INSPECTION)
   add_subdirectory(Inspection)
 endif(BUILD_INSPECTION)
