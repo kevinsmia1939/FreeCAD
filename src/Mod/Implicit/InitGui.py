@@ -6,7 +6,7 @@ import FreeCADGui as Gui
 
 class NativeImplicitWorkbench(Gui.Workbench):
     MenuText = "Native Implicit"
-    ToolTip = "Native implicit fields, bands and mixed B-Rep snapshots"
+    ToolTip = "Native implicit fields, linked operations and live B-Rep inputs"
 
     def Initialize(self):
         import ImplicitCommands

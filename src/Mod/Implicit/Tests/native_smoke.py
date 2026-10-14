@@ -19,14 +19,14 @@ def main():
     feature = document.addObject("Implicit::Feature", "Field")
 
     assert feature.TypeId == "Implicit::Feature"
-    assert feature.SchemaVersion == 2
+    assert feature.SchemaVersion == 3
 
     feature.Function = "Gyroid"
     feature.Period = 8.0
     feature.IsoValue = 0.25
     document.recompute()
 
-    assert "Error" not in feature.State, feature.State
+    assert feature.isValid(), feature.State
     assert math.isclose(Implicit.evaluate(feature, 0.0, 0.0, 0.0), -0.25, abs_tol=1e-12)
     expected_gradient = 2.0 * math.pi / 8.0
     gradient = Implicit.gradient(feature, 0.0, 0.0, 0.0)
@@ -86,7 +86,7 @@ def main():
     assert canonical_graph == Implicit.getFieldGraph(feature)
     document.recompute()
 
-    assert "Error" not in feature.State, feature.State
+    assert feature.isValid(), feature.State
     assert Implicit.classify(feature, 0.0, 0.0, 0.0) == "outside"
     assert Implicit.classify(feature, 2.0, 0.0, 0.0) == "inside"
     assert Implicit.classify(feature, 5.0, 0.0, 0.0) == "inside"

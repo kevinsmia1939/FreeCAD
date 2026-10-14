@@ -4,6 +4,7 @@
 
 #include <App/GeoFeature.h>
 #include <App/PropertyGeo.h>
+#include <App/PropertyLinks.h>
 #include <App/PropertyStandard.h>
 #include <App/PropertyUnits.h>
 #include <Mod/Implicit/ImplicitGlobal.h>
@@ -34,6 +35,12 @@ public:
     App::PropertyString FieldGraph;
     App::PropertyInteger SchemaVersion;
     App::PropertyInteger CacheRevision;
+    App::PropertyEnumeration Operation;
+    App::PropertyLink Left;
+    App::PropertyLink Right;
+    App::PropertyFloat Amount;
+    App::PropertyBool AutoDomain;
+    App::PropertyString StatusMessage;
 
     short mustExecute() const override;
     App::DocumentObjectExecReturn* execute() override;
@@ -50,13 +57,17 @@ public:
 
 protected:
     void onChanged(const App::Property* property) override;
+    void onSettingDocument() override;
 
 private:
     static const char* FunctionEnums[];
+    static const char* OperationEnums[];
     mutable std::shared_ptr<const SurfaceMesh> displayMesh;
     mutable unsigned int displayResolution = 0;
     mutable bool displayAdaptive = false;
     mutable std::optional<Shape> compiledShape;
+    fastsignals::scoped_connection recomputedConnection;
+    void validateDependencies() const;
 };
 
 }  // namespace Implicit

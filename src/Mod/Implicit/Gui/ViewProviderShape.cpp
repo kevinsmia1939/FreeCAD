@@ -187,6 +187,6 @@ void ViewProviderShape::updateMesh()
         faces->coordIndex.setNum(0);
         uploadedMesh.reset();
         TriangleCount.setValue(0);
-        Base::Console().error("Implicit display: %s\n", error.what());
+        Base::Console().error("Implicit display: {}\n", error.what());
     }
 }

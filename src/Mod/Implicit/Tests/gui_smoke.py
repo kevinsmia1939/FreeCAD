@@ -31,8 +31,74 @@ def main():
     baseline = len(document.Objects)
     Gui.runCommand("Implicit_Sphere")
     assert len(document.Objects) == baseline + 1, "workbench sphere command failed"
+    created = document.Objects[-1]
+    assert not created.FieldGraph, "primitive command masked its editable properties"
+    created.Radius = 3
+    document.recompute()
+    assert Implicit.evaluate(created, 0, 0, 0) == -3
     document.undo()
     assert len(document.Objects) == baseline, "workbench command was not undoable"
+    left = document.addObject("Implicit::Feature", "LiveLeft")
+    left.Function = "Sphere"
+    left.Radius = 3
+    right = document.addObject("Implicit::Feature", "LiveRight")
+    right.Function = "Sphere"
+    right.Radius = 1
+    right.Placement.Base = (2, 0, 0)
+    document.recompute()
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(left)
+    Gui.Selection.addSelection(right)
+    Gui.runCommand("Implicit_Difference")
+    linked = document.Objects[-1]
+    assert linked.Left == left and linked.Right == right
+    assert linked.Operation == "Difference"
+    before = linked.ViewObject.CacheBuildCount
+    right.Radius = 2
+    document.recompute()
+    Gui.updateGui()
+    assert linked.ViewObject.CacheBuildCount > before, "linked source edit did not update view"
+    assert Implicit.evaluate(linked, 2, 0, 0) == 2
+    right.Radius = -1
+    document.recompute()
+    Gui.updateGui()
+    assert not linked.isValid() and linked.StatusMessage
+    assert linked.ViewObject.TriangleCount == 0, "failed source left stale display geometry"
+    right.Radius = 2
+    document.recompute()
+    Gui.updateGui()
+    assert linked.isValid() and linked.ViewObject.TriangleCount > 0
+    Gui.Selection.clearSelection()
+    for obj in (linked, left, right):
+        document.removeObject(obj.Name)
+    if os.environ.get("IMPLICIT_TEST_PART_BRIDGE") == "1":
+        import Part  # noqa: F401
+        import PartGui  # noqa: F401
+        box = document.addObject("Part::Box", "LiveBox")
+        sphere = document.addObject("Implicit::Feature", "LiveSphere")
+        sphere.Function = "Sphere"
+        sphere.Radius = 3
+        document.recompute()
+        Gui.Selection.addSelection(box)
+        Gui.Selection.addSelection(sphere)
+        Gui.runCommand("Implicit_Intersection")
+        mixed = document.Objects[-1]
+        assert mixed.Left == box and mixed.Right == sphere
+        assert Implicit.classify(mixed, 1, 1, 1) == "inside"
+        builds = mixed.ViewObject.CacheBuildCount
+        box.Length = 0.5
+        document.recompute()
+        assert mixed.ViewObject.CacheBuildCount > builds
+        assert Implicit.classify(mixed, 1, 1, 1) == "outside"
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(box)
+        Gui.runCommand("Implicit_BRep")
+        distance_field = document.Objects[-1]
+        assert distance_field.Operation == "BRep" and distance_field.Left == box
+        assert distance_field.ViewObject.TriangleCount > 0
+        Gui.Selection.clearSelection()
+        for obj in (distance_field, mixed, sphere, box):
+            document.removeObject(obj.Name)
     feature = document.addObject("Implicit::Feature", "NativeField")
     view = feature.ViewObject
     assert view.TypeId == "ImplicitGui::ViewProviderShape", view.TypeId

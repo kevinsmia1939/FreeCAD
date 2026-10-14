@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <vector>
 
@@ -22,9 +23,17 @@ struct ImplicitExport SurfaceMesh
     std::size_t prunedBlocks = 0;
 };
 
-ImplicitExport SurfaceMesh tessellate(const Shape& shape, unsigned int resolution = 24);
+ImplicitExport SurfaceMesh tessellate(
+    const Shape& shape,
+    unsigned int resolution = 24,
+    const std::atomic_bool* cancelled = nullptr
+);
 // Conservative empty-space octree pruning. All surviving surface cells have
 // the same finest resolution, so no coarse/fine transition faces are required.
-ImplicitExport SurfaceMesh tessellateAdaptive(const Shape& shape, unsigned int resolution = 32);
+ImplicitExport SurfaceMesh tessellateAdaptive(
+    const Shape& shape,
+    unsigned int resolution = 32,
+    const std::atomic_bool* cancelled = nullptr
+);
 
 }  // namespace Implicit

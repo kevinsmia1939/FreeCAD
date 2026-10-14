@@ -31,7 +31,7 @@ def main():
             graph = {"schema": 1, "root": {"type": operation, "left": brep, "right": sphere}}
             Implicit.setFieldGraph(feature, json.dumps(graph))
             document.recompute()
-            assert "Error" not in feature.State
+            assert feature.isValid()
             assert Implicit.classify(feature, 0, 0, 0) == center
             assert Implicit.classify(feature, 1.4, 0, 0) == "outside"
         # Keep this coarse: exact B-Rep distance evaluation is expensive.

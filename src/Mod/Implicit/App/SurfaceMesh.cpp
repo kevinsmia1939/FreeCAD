@@ -36,15 +36,17 @@ struct EdgeHash
 class Extractor
 {
 public:
-    Extractor(const Shape& shape, unsigned int resolution, bool adaptive = false)
+    Extractor(const Shape& shape, unsigned int resolution, bool adaptive, const std::atomic_bool* cancelled)
         : shape(shape)
         , resolution(resolution)
         , width(static_cast<std::size_t>(resolution) + 1)
         , adaptive(adaptive)
+        , cancelled(cancelled)
     {}
 
     SurfaceMesh run()
     {
+        checkCancellation();
         samples.resize(width * width * width, std::numeric_limits<double>::quiet_NaN());
         if (adaptive) {
             block(0, 0, 0, resolution);
@@ -65,6 +67,13 @@ public:
     }
 
 private:
+    void checkCancellation() const
+    {
+        if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+            throw std::runtime_error("implicit operation cancelled");
+        }
+    }
+
     double sample(std::size_t id)
     {
         if (std::isnan(samples[id])) {
@@ -76,6 +85,7 @@ private:
 
     void cell(std::size_t x, std::size_t y, std::size_t z)
     {
+        checkCancellation();
         const std::size_t base = z * width * width + y * width + x;
         const std::array<std::size_t, 8> cube {
             {base,
@@ -97,6 +107,7 @@ private:
 
     void block(std::size_t x, std::size_t y, std::size_t z, std::size_t span)
     {
+        checkCancellation();
         if (span == 1) {
             cell(x, y, z);
             return;
@@ -138,6 +149,7 @@ private:
 
     double checkedValue(const Base::Vector3d& position) const
     {
+        checkCancellation();
         const double value = shape.value(position);
         if (!std::isfinite(value)) {
             throw std::runtime_error("non-finite field value during tessellation");
@@ -268,6 +280,7 @@ private:
     unsigned int resolution;
     std::size_t width;
     bool adaptive;
+    const std::atomic_bool* cancelled;
     SurfaceMesh mesh;
     std::vector<Base::Vector3d> referenceVertices;
     std::vector<double> samples;
@@ -276,20 +289,20 @@ private:
 
 }  // namespace
 
-SurfaceMesh tessellate(const Shape& shape, unsigned int resolution)
+SurfaceMesh tessellate(const Shape& shape, unsigned int resolution, const std::atomic_bool* cancelled)
 {
     if (resolution < 2 || resolution > 64) {
         throw std::invalid_argument("tessellation resolution must be between 2 and 64");
     }
-    return Extractor(shape, resolution).run();
+    return Extractor(shape, resolution, false, cancelled).run();
 }
 
-SurfaceMesh tessellateAdaptive(const Shape& shape, unsigned int resolution)
+SurfaceMesh tessellateAdaptive(const Shape& shape, unsigned int resolution, const std::atomic_bool* cancelled)
 {
     if (resolution < 2 || resolution > 64 || (resolution & (resolution - 1)) != 0) {
         throw std::invalid_argument("adaptive resolution must be a power of two between 2 and 64");
     }
-    return Extractor(shape, resolution, true).run();
+    return Extractor(shape, resolution, true, cancelled).run();
 }
 
 }  // namespace Implicit

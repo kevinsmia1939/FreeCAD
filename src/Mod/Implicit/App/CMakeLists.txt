@@ -35,6 +35,10 @@ if(IMPLICIT_OCCT_SOURCE_DIR)
     target_link_directories(Implicit PRIVATE ${OCC_LIBRARY_DIR})
     target_link_libraries(Implicit ${OCC_LIBRARIES})
     target_compile_definitions(Implicit PRIVATE IMPLICIT_WITH_OCCT_BRIDGE)
+    if(BUILD_PART)
+        target_link_libraries(Implicit Part)
+        target_compile_definitions(Implicit PRIVATE IMPLICIT_WITH_PART_BRIDGE)
+    endif()
 endif()
 
 target_include_directories(Implicit PRIVATE

@@ -8,6 +8,38 @@
 #include <stdexcept>
 #include <utility>
 
+Implicit::PlacedField::PlacedField(FieldPtr field, Base::Placement sourceToTarget, double sign)
+    : field(std::move(field))
+    , toSource(sourceToTarget.inverse())
+    , toTargetRotation(sourceToTarget.getRotation())
+    , sign(sign)
+{
+    if (!this->field || (sign != 1.0 && sign != -1.0)) {
+        throw std::invalid_argument("invalid placed field");
+    }
+    const auto& position = sourceToTarget.getPosition();
+    const double* rotation = sourceToTarget.getRotation().getValue();
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+        || !std::all_of(rotation, rotation + 4, [](double value) { return std::isfinite(value); })) {
+        throw std::invalid_argument("field placement must be finite");
+    }
+}
+
+double Implicit::PlacedField::value(const Base::Vector3d& point) const
+{
+    Base::Vector3d local;
+    toSource.multVec(point, local);
+    return sign * field->value(local);
+}
+
+Base::Vector3d Implicit::PlacedField::gradient(const Base::Vector3d& point) const
+{
+    Base::Vector3d local, result;
+    toSource.multVec(point, local);
+    toTargetRotation.multVec(field->gradient(local), result);
+    return sign * result;
+}
+
 using namespace Implicit;
 
 BoxField::BoxField(Base::Vector3d center, Base::Vector3d halfSize)

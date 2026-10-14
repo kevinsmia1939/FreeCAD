@@ -4,6 +4,8 @@
 #include <Base/Interpreter.h>
 #include <Base/PyObjectBase.h>
 #include <cmath>
+#include <atomic>
+#include <vector>
 
 #include "Feature.h"
 #include "FieldGraph.h"
@@ -14,6 +16,22 @@ namespace Implicit
 
 namespace
 {
+
+constexpr const char* cancellationName = "Implicit.CancellationToken";
+
+std::atomic_bool* cancellationFromPython(PyObject* object)
+{
+    auto* token = static_cast<std::atomic_bool*>(PyCapsule_GetPointer(object, cancellationName));
+    if (!token) {
+        throw Py::Exception();
+    }
+    return token;
+}
+
+void deleteCancellation(PyObject* capsule)
+{
+    delete static_cast<std::atomic_bool*>(PyCapsule_GetPointer(capsule, cancellationName));
+}
 
 Feature* featureFromPython(PyObject* object)
 {
@@ -40,6 +58,15 @@ Base::Vector3d vectorFromTuple(const Py::Tuple& args, Py_ssize_t offset)
     return Base::Vector3d(coordinates[0], coordinates[1], coordinates[2]);
 }
 
+Py::Tuple vectorToPython(const Base::Vector3d& point)
+{
+    Py::Tuple tuple(3);
+    tuple[0] = Py::Float(point.x);
+    tuple[1] = Py::Float(point.y);
+    tuple[2] = Py::Float(point.z);
+    return tuple;
+}
+
 }  // namespace
 
 class Module: public Py::ExtensionModule<Module>
@@ -59,6 +86,11 @@ public:
             "evaluateBatch(feature, points) -> scalar values in feature-local coordinates"
         );
         add_varargs_method("gradient", &Module::gradient, "gradient(feature, x, y, z) -> (dx, dy, dz)");
+        add_varargs_method(
+            "bounds",
+            &Module::bounds,
+            "bounds(feature) -> effective local domain (minimum, maximum)"
+        );
         add_varargs_method(
             "classify",
             &Module::classify,
@@ -89,10 +121,55 @@ public:
             &Module::tessellateAdaptive,
             "tessellateAdaptive(feature, resolution=32) -> mesh with conservative block pruning"
         );
+        add_varargs_method(
+            "newCancellationToken",
+            &Module::newCancellationToken,
+            "newCancellationToken() -> one-shot thread-safe extraction token"
+        );
+        add_varargs_method(
+            "cancel",
+            &Module::cancel,
+            "cancel(token) -> request cancellation of extraction using token"
+        );
         initialize("Native implicit geometry primitives for FreeCAD.");
     }
 
 private:
+    Py::Object bounds(const Py::Tuple& args)
+    {
+        if (args.size() != 1) {
+            throw Py::TypeError("bounds expects (feature)");
+        }
+        const auto shape = featureFromPython(args[0].ptr())->makeShape();
+        Py::Tuple result(2);
+        result[0] = vectorToPython(shape.getDomain().minimum);
+        result[1] = vectorToPython(shape.getDomain().maximum);
+        return result;
+    }
+
+    Py::Object newCancellationToken(const Py::Tuple& args)
+    {
+        if (args.size() != 0) {
+            throw Py::TypeError("newCancellationToken expects no arguments");
+        }
+        auto token = std::make_unique<std::atomic_bool>(false);
+        PyObject* capsule = PyCapsule_New(token.get(), cancellationName, deleteCancellation);
+        if (!capsule) {
+            throw Py::Exception();
+        }
+        token.release();
+        return Py::Object(capsule, true);
+    }
+
+    Py::Object cancel(const Py::Tuple& args)
+    {
+        if (args.size() != 1) {
+            throw Py::TypeError("cancel expects (token)");
+        }
+        cancellationFromPython(args[0].ptr())->store(true, std::memory_order_relaxed);
+        return Py::None();
+    }
+
     Py::Object evaluateBatch(const Py::Tuple& args)
     {
         if (args.size() != 2) {
@@ -108,7 +185,8 @@ private:
         if (count > 1000000) {
             throw Py::ValueError("batch point budget exceeded");
         }
-        Py::List values;
+        std::vector<Base::Vector3d> points;
+        points.reserve(static_cast<std::size_t>(count));
         for (Py_ssize_t index = 0; index < count; ++index) {
             PyObject* rawCoordinates = PySequence_Fast(
                 PySequence_Fast_GET_ITEM(sequence.ptr(), index),
@@ -131,7 +209,18 @@ private:
                     throw Py::ValueError("point coordinates must be finite");
                 }
             }
-            values.append(Py::Float(shape.value(Base::Vector3d(point[0], point[1], point[2]))));
+            points.emplace_back(point[0], point[1], point[2]);
+        }
+        std::vector<double> results(points.size());
+        {
+            Base::PyGILStateRelease release;
+            for (std::size_t index = 0; index < points.size(); ++index) {
+                results[index] = shape.value(points[index]);
+            }
+        }
+        Py::List values;
+        for (const auto value : results) {
+            values.append(Py::Float(value));
         }
         return values;
     }
@@ -147,11 +236,11 @@ private:
 
     Py::Object extractMesh(const Py::Tuple& args, bool adaptive)
     {
-        if (args.size() < 1 || args.size() > 2) {
-            throw Py::TypeError("tessellate expects (feature, resolution=24)");
+        if (args.size() < 1 || args.size() > 3) {
+            throw Py::TypeError("tessellate expects (feature, resolution=24, cancellationToken=None)");
         }
         long resolution = adaptive ? 32 : 24;
-        if (args.size() == 2) {
+        if (args.size() >= 2) {
             if (!PyLong_Check(args[1].ptr()) || PyBool_Check(args[1].ptr())) {
                 throw Py::TypeError("tessellation resolution must be an integer");
             }
@@ -164,9 +253,18 @@ private:
             throw Py::ValueError("tessellation resolution must be between 2 and 64");
         }
         const Shape shape = featureFromPython(args[0].ptr())->makeShape();
-        const auto mesh = adaptive
-            ? Implicit::tessellateAdaptive(shape, static_cast<unsigned int>(resolution))
-            : Implicit::tessellate(shape, static_cast<unsigned int>(resolution));
+        const auto* cancelled = args.size() == 3 && args[2].ptr() != Py_None
+            ? cancellationFromPython(args[2].ptr())
+            : nullptr;
+        SurfaceMesh mesh;
+        {
+            // Capture immutable geometry while holding the GIL; never access
+            // FreeCAD document objects or Python containers in the released region.
+            Base::PyGILStateRelease release;
+            mesh = adaptive
+                ? Implicit::tessellateAdaptive(shape, static_cast<unsigned int>(resolution), cancelled)
+                : Implicit::tessellate(shape, static_cast<unsigned int>(resolution), cancelled);
+        }
         Py::List vertices;
         Py::List normals;
         Py::List triangles;

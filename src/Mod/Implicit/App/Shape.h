@@ -40,6 +40,11 @@ public:
         return insideNegative;
     }
 
+    FieldPtr getField() const
+    {
+        return field;
+    }
+
 private:
     FieldPtr field;
     Domain domain;

@@ -6,6 +6,7 @@
 #include <limits>
 
 #include <Base/Vector3D.h>
+#include <Base/Placement.h>
 #include <Mod/Implicit/ImplicitGlobal.h>
 
 namespace Implicit
@@ -33,6 +34,26 @@ public:
 };
 
 using FieldPtr = std::shared_ptr<const Field>;
+
+// Evaluate an immutable operand in another feature's local coordinates.
+// sign converts positive-inside operands to the canonical negative-inside set.
+class ImplicitExport PlacedField final: public Field
+{
+public:
+    PlacedField(FieldPtr field, Base::Placement sourceToTarget, double sign = 1.0);
+    double value(const Base::Vector3d& point) const override;
+    Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override
+    {
+        return field->lipschitzBound();
+    }
+
+private:
+    FieldPtr field;
+    Base::Placement toSource;
+    Base::Rotation toTargetRotation;
+    double sign;
+};
 
 class ImplicitExport BoxField final: public Field
 {
