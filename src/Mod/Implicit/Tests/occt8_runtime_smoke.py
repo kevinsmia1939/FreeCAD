@@ -24,6 +24,11 @@ def main():
         clipped = source.Shape.common(Part.makeBox(4, 6, 8, App.Vector(2, 0, 0)))
         assert clipped.isValid() and math.isclose(clipped.Volume, 96, abs_tol=1e-7)
         field = doc.addObject("Implicit::Feature", "Distance")
+        if App.GuiUp:
+            # This fixture audits linkage, not display quality. Avoid an
+            # expensive default-resolution B-Rep distance mesh; dedicated GUI
+            # smoke tests exercise extraction, cache updates and restoration.
+            field.ViewObject.Resolution = 4
         field.Operation = "BRep"
         field.Left = source
         doc.recompute()
