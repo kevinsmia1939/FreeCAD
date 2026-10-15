@@ -23,6 +23,20 @@ struct ImplicitExport SurfaceMesh
     std::size_t prunedBlocks = 0;
 };
 
+struct ImplicitExport MeshQuality
+{
+    double maxVertexResidual = 0;
+    double maxCentroidResidual = 0;
+    double maxEdgeMidpointResidual = 0;
+    std::size_t boundaryEdges = 0;
+    std::size_t nonManifoldEdges = 0;
+    std::size_t inconsistentEdges = 0;
+    std::size_t degenerateTriangles = 0;
+};
+
+// Sampled field residuals, not a geometric/Hausdorff error certificate.
+ImplicitExport MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh);
+
 ImplicitExport SurfaceMesh tessellate(
     const Shape& shape,
     unsigned int resolution = 24,

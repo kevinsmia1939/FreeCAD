@@ -36,6 +36,8 @@ def main():
     assert len(roots) == 2, roots
     assert all(abs(hit["distance"] - expected) < 1e-7
                for hit, expected in zip(roots, (2, 6))), roots
+    projection = Implicit.project(mixed, (8, 2, 6.5))
+    assert projection["converged"] and abs(projection["point"][2] - 6) < 1e-7, projection
     # Native representation dispatch also accepts a Part object directly.
     mixed.Left = box
     doc.recompute()

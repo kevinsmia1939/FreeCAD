@@ -87,6 +87,18 @@ public:
         );
         add_varargs_method("gradient", &Module::gradient, "gradient(feature, x, y, z) -> (dx, dy, dz)");
         add_varargs_method(
+            "project",
+            &Module::project,
+            "project(feature, point, distanceTolerance=1e-7, fieldTolerance=1e-9, "
+            "maxIterations=64, gradientStep=1e-5) -> local stationary projection diagnostics"
+        );
+        add_varargs_method(
+            "inspectTessellation",
+            &Module::inspectTessellation,
+            "inspectTessellation(feature, resolution=24, adaptive=False) -> sampled mesh quality "
+            "report"
+        );
+        add_varargs_method(
             "intersectRay", &Module::intersectRay,
             "intersectRay(feature, origin, direction, minDistance, maxDistance, samples=512, "
             "distanceTolerance=1e-7) -> local sampled root dictionaries; direction is normalized"
@@ -140,6 +152,74 @@ public:
     }
 
 private:
+    Py::Object inspectTessellation(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        int resolution = 24;
+        int adaptive = 0;
+        if (!PyArg_ParseTuple(args.ptr(), "O|ip", &object, &resolution, &adaptive)) {
+            throw Py::Exception();
+        }
+        const Shape shape = featureFromPython(object)->makeShape();
+        SurfaceMesh mesh;
+        MeshQuality quality;
+        {
+            Base::PyGILStateRelease release;
+            mesh = adaptive ? Implicit::tessellateAdaptive(shape, resolution)
+                            : Implicit::tessellate(shape, resolution);
+            quality = inspectMesh(shape, mesh);
+        }
+        Py::Dict result;
+        result["vertices"] = Py::Long(mesh.vertices.size());
+        result["triangles"] = Py::Long(mesh.triangles.size());
+        result["max_vertex_residual"] = Py::Float(quality.maxVertexResidual);
+        result["max_centroid_residual"] = Py::Float(quality.maxCentroidResidual);
+        result["max_edge_midpoint_residual"] = Py::Float(quality.maxEdgeMidpointResidual);
+        result["boundary_edges"] = Py::Long(quality.boundaryEdges);
+        result["non_manifold_edges"] = Py::Long(quality.nonManifoldEdges);
+        result["inconsistent_edges"] = Py::Long(quality.inconsistentEdges);
+        result["degenerate_triangles"] = Py::Long(quality.degenerateTriangles);
+        return result;
+    }
+
+    Py::Object project(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        Base::Vector3d point;
+        double distanceTolerance = 1e-7, fieldTolerance = 1e-9, gradientStep = 1e-5;
+        int iterations = 64;
+        if (!PyArg_ParseTuple(
+                args.ptr(),
+                "O(ddd)|ddid",
+                &object,
+                &point.x,
+                &point.y,
+                &point.z,
+                &distanceTolerance,
+                &fieldTolerance,
+                &iterations,
+                &gradientStep
+            )) {
+            throw Py::Exception();
+        }
+        const Shape shape = featureFromPython(object)->makeShape();
+        Shape::Projection projection;
+        {
+            Base::PyGILStateRelease release;
+            projection
+                = shape.project(point, distanceTolerance, fieldTolerance, iterations, gradientStep);
+        }
+        Py::Dict result;
+        result["point"] = vectorToPython(projection.point);
+        result["distance"] = Py::Float(projection.distance);
+        result["residual"] = Py::Float(projection.residual);
+        result["stationarity"] = Py::Float(projection.stationarity);
+        result["iterations"] = Py::Long(projection.iterations);
+        result["converged"] = Py::Boolean(projection.converged);
+        result["status"] = Py::String(projection.status);
+        return result;
+    }
+
     Py::Object intersectRay(const Py::Tuple& args)
     {
         PyObject* object = nullptr;

@@ -20,6 +20,26 @@ struct ImplicitExport Domain
 class ImplicitExport Shape
 {
 public:
+    struct Projection
+    {
+        Base::Vector3d point;
+        double residual = 0;
+        double distance = 0;
+        double stationarity = 0;
+        int iterations = 0;
+        bool converged = false;
+        const char* status = "iteration_limit";
+    };
+
+    // Local constrained stationary point, not a certified global nearest point.
+    Projection project(
+        const Base::Vector3d& query,
+        double distanceTolerance = 1e-7,
+        double fieldTolerance = 1e-9,
+        int maxIterations = 64,
+        double gradientStep = 1e-5
+    ) const;
+
     struct RayHit
     {
         double distance;

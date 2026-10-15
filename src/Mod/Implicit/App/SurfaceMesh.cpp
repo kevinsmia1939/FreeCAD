@@ -305,4 +305,55 @@ SurfaceMesh tessellateAdaptive(const Shape& shape, unsigned int resolution, cons
     return Extractor(shape, resolution, true, cancelled).run();
 }
 
+MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh)
+{
+    MeshQuality quality;
+    struct Incidence
+    {
+        std::size_t count = 0;
+        long orientation = 0;
+    };
+    std::unordered_map<Edge, Incidence, EdgeHash> edges;
+    for (const auto& vertex : mesh.vertices) {
+        quality.maxVertexResidual = std::max(quality.maxVertexResidual, std::abs(shape.value(vertex)));
+    }
+    for (const auto& triangle : mesh.triangles) {
+        const auto& a = mesh.vertices.at(triangle[0]);
+        const auto& b = mesh.vertices.at(triangle[1]);
+        const auto& c = mesh.vertices.at(triangle[2]);
+        const auto normal = (b - a).Cross(c - a);
+        if (std::hypot(normal.x, normal.y, normal.z) == 0) {
+            ++quality.degenerateTriangles;
+        }
+        quality.maxCentroidResidual
+            = std::max(quality.maxCentroidResidual, std::abs(shape.value(a / 3 + b / 3 + c / 3)));
+        for (int side = 0; side < 3; ++side) {
+            const auto first = triangle[side];
+            const auto second = triangle[(side + 1) % 3];
+            const Edge key(std::min(first, second), std::max(first, second));
+            auto& edge = edges[key];
+            if (edge.count == 0) {
+                quality.maxEdgeMidpointResidual = std::max(
+                    quality.maxEdgeMidpointResidual,
+                    std::abs(shape.value(mesh.vertices[first] / 2 + mesh.vertices[second] / 2))
+                );
+            }
+            ++edge.count;
+            edge.orientation += first < second ? 1 : -1;
+        }
+    }
+    for (const auto& [key, edge] : edges) {
+        if (edge.count == 1) {
+            ++quality.boundaryEdges;
+        }
+        else if (edge.count != 2) {
+            ++quality.nonManifoldEdges;
+        }
+        else if (edge.orientation != 0) {
+            ++quality.inconsistentEdges;
+        }
+    }
+    return quality;
+}
+
 }  // namespace Implicit

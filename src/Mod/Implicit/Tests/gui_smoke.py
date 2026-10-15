@@ -36,7 +36,42 @@ def main():
     created.Radius = 3
     document.recompute()
     assert Implicit.evaluate(created, 0, 0, 0) == -3
+    import ImplicitCommands as commands
+    # Probe mathematical fields with world rays, not rendered triangle IDs.
+    created.Placement = App.Placement(App.Vector(10, 2, 1),
+                                     App.Rotation(App.Vector(0, 0, 1), 90))
+    document.recompute()
+    hit = commands.probe_ray(created, (10, -5, 1), (0, 1, 0))
+    assert hit and abs(hit["world_point"][1] + 1) < 1e-6, hit
+    assert hit["residual"] < 1e-6
+    assert commands.probe_ray(created, (100, -5, 1), (0, 1, 0)) is None
+    assert commands.probe_ray(created, (10, 20, 1), (0, 1, 0), True) is None
+    view = Gui.activeDocument().activeView()
+    view.viewTop()
+    for camera_type in ("Orthographic", "Perspective"):
+        view.setCameraType(camera_type)
+        view.fitAll()
+        Gui.updateGui()
+        screen = view.getPointOnScreen(App.Vector(10, 2, 1))
+        viewport_hit = commands.probe_view(created, view, screen)
+        assert viewport_hit and viewport_hit["residual"] < 1e-6, (camera_type, viewport_hit)
+    view.setCameraType("Orthographic")
+    # Starting again cancels the previous callback; explicit cancellation is safe.
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(created)
+    commands.inspect_selected()
+    count = len(document.Objects)
+    commands.start_probe()
+    first = commands._active_probe
+    commands.start_probe()
+    assert commands._active_probe is not None and commands._active_probe is not first
+    commands.cancel_probe()
+    commands.cancel_probe()
+    assert commands._active_probe is None and len(document.Objects) == count
+    commands.start_probe()
+    Gui.Selection.clearSelection()
     document.undo()
+    assert commands._active_probe is None, "deleting the target left a probe callback alive"
     assert len(document.Objects) == baseline, "workbench command was not undoable"
     left = document.addObject("Implicit::Feature", "LiveLeft")
     left.Function = "Sphere"
@@ -186,6 +221,14 @@ def main():
         faces = named(view.RootNode, "ImplicitFaces")
         assert faces.coordIndex.getNum() == view.TriangleCount * 4
         App.closeDocument(document.Name)
+    probe_doc = App.newDocument("ProbeCloseSmoke")
+    probe_target = probe_doc.addObject("Implicit::Feature", "ProbeTarget")
+    probe_doc.recompute()
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(probe_target)
+    commands.start_probe()
+    App.closeDocument(probe_doc.Name)
+    assert commands._active_probe is None, "document close left a probe callback alive"
     print("native implicit GUI smoke test passed", flush=True)
     Gui.getMainWindow().close()
 

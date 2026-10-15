@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+foreach(query_test ray geometry)
+    add_test(NAME Implicit${query_test}Smoke
+        COMMAND $<TARGET_FILE:FreeCADMainCmd> ${CMAKE_CURRENT_SOURCE_DIR}/${query_test}_smoke.py)
+    set_tests_properties(Implicit${query_test}Smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION "native implicit ${query_test} smoke test passed"
+        FAIL_REGULAR_EXPRESSION "Traceback|Exception while processing file" TIMEOUT 120)
+endforeach()
+
 add_test(NAME ImplicitLinkedSmoke
     COMMAND $<TARGET_FILE:FreeCADMainCmd> ${CMAKE_CURRENT_SOURCE_DIR}/linked_smoke.py)
 set_tests_properties(ImplicitLinkedSmoke PROPERTIES
