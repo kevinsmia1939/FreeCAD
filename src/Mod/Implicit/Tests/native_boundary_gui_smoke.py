@@ -6,6 +6,7 @@ import traceback
 import FreeCAD as App
 import FreeCADGui as Gui
 import ImplicitNative
+import ImplicitSection
 
 
 def main():
@@ -53,6 +54,29 @@ def main():
     obj.RightCenter = (2, 0, 0)
     document.recompute()
     assert obj.isValid() and obj.NativeFaceCount == 2
+    Gui.runCommand("Implicit_OCCTGyroidSection")
+    section = document.Objects[-1]
+    assert section.isValid() and section.CurveCount > 0, section.BackendStatus
+    assert section.Proxy._section["resolved"] is True and not hasattr(section, "Shape")
+    section_provider = section.ViewObject.Proxy
+    points = section_provider._coordinates
+    assert points.point.getNum() > 0 and section.GeometricBound <= .1
+    section.GeometricTolerance = .05
+    document.recompute()
+    assert section.isValid() and section.GeometricBound <= .05, section.BackendStatus
+    assert section_provider._coordinates is points
+    section.MaximumCells = 4
+    try:
+        section.Proxy.execute(section)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("unresolved native section was accepted")
+    assert section.Proxy._section is None and points.point.getNum() == 0
+    section.MaximumCells = 512
+    document.recompute()
+    assert section.isValid() and section.CurveCount > 0
+    section_name = section.Name
     with tempfile.TemporaryDirectory(prefix="implicit-native-boundary-") as directory:
         filename = os.path.join(directory, "native.FCStd")
         document.saveAs(filename)
@@ -66,6 +90,9 @@ def main():
         assert restored.NativeFaceCount == 2 and restored.DisplayErrorBound <= .1
         Gui.updateGui()
         assert restored.ViewObject.Proxy._coordinates.point.getNum() > 0
+        restored_section = document.getObject(section_name)
+        assert restored_section.isValid() and restored_section.Proxy._section["resolved"]
+        assert restored_section.ViewObject.Proxy._coordinates.point.getNum() > 0
         App.closeDocument(document.Name)
     print("native OCCT boundary GUI smoke test passed", flush=True)
     Gui.getMainWindow().close()

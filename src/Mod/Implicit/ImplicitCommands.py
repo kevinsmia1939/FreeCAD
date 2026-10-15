@@ -241,6 +241,7 @@ class Command:
 
 def register():
     import ImplicitNative
+    import ImplicitSection
     commands = [
         ("Implicit_Sphere", "Implicit sphere", lambda: primitive("sphere")),
         ("Implicit_Gyroid", "Implicit gyroid", lambda: primitive("gyroid")),
@@ -251,6 +252,7 @@ def register():
         ("Implicit_Difference", "Linked field difference", lambda: boolean("difference")),
         ("Implicit_Probe", "Probe selected implicit surface", start_probe),
         ("Implicit_Inspect", "Inspect implicit mesh quality", inspect_selected),
+        ("Implicit_OCCTGyroidSection", "OCCT gyroid-plane section (experimental)", ImplicitSection.create),
     ]
     for operation in ("Sphere", "Trim", "Common", "Fuse", "Cut"):
         commands.append(("Implicit_OCCT" + operation,

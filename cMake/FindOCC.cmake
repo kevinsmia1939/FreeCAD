@@ -7,8 +7,27 @@
 # OCC_LIBRARIES      - Link this to use OCC
 # OCC_OCAF_LIBRARIES - Link this to use OCC OCAF framework
 
-# we first try to find opencascade directly:
-if (NOT OCCT_CMAKE_FALLBACK)
+set(FREECAD_OCCT_BUILD_DIR "" CACHE PATH
+    "Explicit OCCT source build (strict imported targets; no system-library fallback)")
+
+# An OCCT build-tree export is not its install-tree Config.cmake. The latter
+# derives installation paths and must not redirect an experimental build into
+# installed libraries. Keep this opt-in, so existing system-OCCT builds survive.
+if (FREECAD_OCCT_BUILD_DIR)
+    get_filename_component(_freecad_occt_build "${FREECAD_OCCT_BUILD_DIR}" ABSOLUTE)
+    if (NOT EXISTS "${_freecad_occt_build}/OpenCASCADETargets.cmake"
+        OR NOT EXISTS "${_freecad_occt_build}/include/opencascade/Standard_Version.hxx")
+        message(FATAL_ERROR "Explicit OCCT source build is not configured: ${_freecad_occt_build}")
+    endif ()
+    include("${_freecad_occt_build}/OpenCASCADETargets.cmake")
+    get_target_property(_occt_configs TKernel IMPORTED_CONFIGURATIONS)
+    list(GET _occt_configs 0 _occt_config)
+    get_target_property(_occt_kernel TKernel "IMPORTED_LOCATION_${_occt_config}")
+    get_filename_component(OpenCASCADE_LIBRARY_DIR "${_occt_kernel}" DIRECTORY)
+    set(OpenCASCADE_INCLUDE_DIR "${_freecad_occt_build}/include/opencascade")
+    set(OpenCASCADE_FOUND TRUE)
+# Otherwise retain normal installed-OCCT discovery.
+elseif (NOT OCCT_CMAKE_FALLBACK)
     find_package(OpenCASCADE CONFIG QUIET)
     get_property(flags DIRECTORY PROPERTY COMPILE_DEFINITIONS)
     # OCCT 7.5 adds this define that causes hundreds of compiler warnings with Qt5.x, so remove it again
@@ -142,6 +161,31 @@ if (OCC_FOUND)
         list(APPEND OCC_OCAF_LIBRARIES TKXDESTEP TKXDEIGES)
     else ()
         list(APPEND OCC_LIBRARIES TKDESTEP TKDEIGES TKDEGLTF TKDESTL)
+    endif ()
+    if (FREECAD_OCCT_BUILD_DIR)
+        set(_occt_missing_targets "")
+        set(_occt_unbuilt_targets "")
+        foreach (_occt_target IN LISTS OCC_LIBRARIES OCC_OCAF_LIBRARIES)
+            if (NOT TARGET "${_occt_target}")
+                list(APPEND _occt_missing_targets "${_occt_target}")
+                continue()
+            endif ()
+            get_target_property(_occt_configs "${_occt_target}" IMPORTED_CONFIGURATIONS)
+            list(GET _occt_configs 0 _occt_config)
+            get_target_property(_occt_library "${_occt_target}" "IMPORTED_LOCATION_${_occt_config}")
+            if (NOT EXISTS "${_occt_library}")
+                list(APPEND _occt_unbuilt_targets "${_occt_target}")
+            endif ()
+        endforeach ()
+        if (_occt_missing_targets OR _occt_unbuilt_targets)
+            message(FATAL_ERROR
+                "Explicit OCCT source build is not ready for FreeCAD.\n"
+                "Toolkits not configured: ${_occt_missing_targets}\n"
+                "Toolkits configured but not built: ${_occt_unbuilt_targets}\n"
+                "Build the required OCCT modules/toolkits first. System-library fallback is forbidden.\n"
+                "Use a separate FreeCAD migration build; do not replace the working OCCT 7 build.")
+        endif ()
+        message(STATUS "Using explicit OCCT build-tree targets only: ${_freecad_occt_build}")
     endif ()
     if (OCC_VERSION_DEVELOPMENT)
         message(STATUS "Found OpenCASCADE version: ${OCC_VERSION_STRING} (${OCC_VERSION_DEVELOPMENT})")
