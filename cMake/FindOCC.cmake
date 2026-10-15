@@ -102,6 +102,33 @@ if (OCC_INCLUDE_DIR)
 
     set(OCC_VERSION_STRING "${OCC_MAJOR}.${OCC_MINOR}.${OCC_MAINT}")
 
+    # OCCT 8 installs compatibility aliases but intentionally leaves them out
+    # of its build-tree header collection. FreeCAD still uses these supported
+    # aliases. Recover them from this build's own source manifest, never from
+    # an installed (possibly ABI-incompatible) OCCT. Keep OCC_INCLUDE_DIR a
+    # single directory for version/header checks; propagate aliases through
+    # TKernel, the common transitive dependency of the imported toolkits.
+    if (FREECAD_OCCT_BUILD_DIR AND OCC_VERSION_STRING VERSION_GREATER_EQUAL 8.0.0
+        AND NOT EXISTS "${OCC_INCLUDE_DIR}/TopTools_ListOfShape.hxx")
+        if (NOT EXISTS "${_freecad_occt_build}/CMakeCache.txt")
+            message(FATAL_ERROR "Explicit OCCT source build lacks its source-directory metadata")
+        endif ()
+        file(STRINGS "${_freecad_occt_build}/CMakeCache.txt" _occt_source_entry
+            REGEX "^CMAKE_HOME_DIRECTORY:INTERNAL=")
+        string(REGEX REPLACE "^[^=]*=" "" _occt_source "${_occt_source_entry}")
+        if (NOT EXISTS "${_occt_source}/src/Deprecated/PACKAGES.cmake")
+            message(FATAL_ERROR "Explicit OCCT 8 source build lacks its compatibility-header manifest")
+        endif ()
+        include("${_occt_source}/src/Deprecated/PACKAGES.cmake")
+        foreach (_occt_alias_dir IN LISTS OCCT_DEPRECATED_HEADER_DIRECTORIES)
+            if (NOT IS_DIRECTORY "${_occt_alias_dir}")
+                message(FATAL_ERROR "Explicit OCCT compatibility-header directory missing: ${_occt_alias_dir}")
+            endif ()
+        endforeach ()
+        target_include_directories(TKernel SYSTEM INTERFACE ${OCCT_DEPRECATED_HEADER_DIRECTORIES})
+        message(STATUS "OCCT source-build compatibility headers: ${OCCT_DEPRECATED_HEADER_DIRECTORIES}")
+    endif ()
+
     # OCC_VERSION_DEVELOPMENT is only defined for development builds (e.g. "dev", "beta", "rc1")
     file(STRINGS ${OCC_INCLUDE_DIR}/Standard_Version.hxx OCC_DEVELOPMENT
             REGEX "#define OCC_VERSION_DEVELOPMENT.*"
