@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Experimental OCCT 8 sphere-boundary GUI adapter, isolated from OCCT 7 Part.
+"""Experimental sphere boundaries: isolated worker or explicit OCCT 8 native handles.
 
 Only editable mathematical inputs persist. Native faces are reconstructed in a
-separate executable on recompute; returned triangles are disposable Coin data.
-This is not a Part::Feature or an in-process OCCT 8 FreeCAD build.
+worker or in-process extension on recompute; triangles are disposable Coin data.
+Neither backend exposes Part::Feature::Shape or a validated solid.
 """
 import json
 import math
@@ -29,7 +29,9 @@ def worker_path():
 class NativeBoundary:
     def __init__(self, obj):
         self._mesh = None
+        self._native_faces = None
         obj.addProperty("App::PropertyInteger", "NativeSchema", "Native OCCT").NativeSchema = 1
+        self._add_backend(obj)
         obj.addProperty("App::PropertyEnumeration", "Operation", "Native OCCT")
         obj.Operation = ["Sphere", "Trim", "Common", "Fuse", "Cut"]
         obj.addProperty("App::PropertyVector", "LeftCenter", "Operands")
@@ -48,8 +50,43 @@ class NativeBoundary:
         obj.setEditorMode("NativeRevision", 2)
         obj.Proxy = self
 
+    @staticmethod
+    def _add_backend(obj):
+        if "Backend" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyEnumeration", "Backend", "Native OCCT")
+            obj.Backend = ["Worker", "InProcess"]
+
+    def native_faces(self):
+        """Immutable snapshots of the last successful in-process recompute, not Part shapes."""
+        if self._native_faces is None:
+            raise RuntimeError("No successful in-process native-face recompute")
+        return tuple(self._native_faces)
+
+    @staticmethod
+    def _in_process(obj, mode):
+        import ImplicitOCCT as native  # Public facade checks the ABI before loading C++.
+        tolerance = obj.GeometricTolerance.Value
+        left = native.sphere(tuple(obj.LeftCenter), obj.LeftRadius.Value, tolerance)
+        if mode == "sphere":
+            faces, sources = [left], [0]
+        elif mode == "trim":
+            faces = [native.trim(left, tuple(obj.PlaneNormal), obj.PlaneOffset.Value)]
+            sources = [0]
+        else:
+            right = native.sphere(tuple(obj.RightCenter), obj.RightRadius.Value, tolerance)
+            pairs = native.boolean_faces(left, right, mode)
+            faces, sources = [p[0] for p in pairs], [p[1] for p in pairs]
+        meshes = []
+        for face, source in zip(faces, sources):
+            mesh = native.tessellate(face, tolerance)
+            mesh["source"] = source
+            meshes.append(mesh)
+        return {"schema": 1, "backend": "OCCT-8.1-in-process-sphere",
+                "solid_validated": False, "faces": meshes}, faces
+
     def execute(self, obj):
         self._mesh = None
+        self._native_faces = None
         try:
             if obj.NativeSchema != 1:
                 raise ValueError("Unsupported native boundary feature schema")
@@ -60,22 +97,31 @@ class NativeBoundary:
             values = [obj.GeometricTolerance.Value] + a + b
             if not all(math.isfinite(v) for v in values):
                 raise ValueError("Native inputs must be finite")
-            run = subprocess.run([worker_path(), mode] + [format(v, ".17g") for v in values],
-                                 capture_output=True, text=True, timeout=30, check=False)
-            if run.returncode:
-                raise RuntimeError(run.stderr.strip() or "Native worker failed")
-            data = json.loads(run.stdout)
-            if (data.get("schema") != 1 or data.get("backend") != "OCCT-8.1-native-sphere"
+            in_process = str(getattr(obj, "Backend", "Worker")) == "InProcess"
+            if in_process:
+                data, native_faces = self._in_process(obj, mode)
+            else:
+                run = subprocess.run([worker_path(), mode] + [format(v, ".17g") for v in values],
+                                     capture_output=True, text=True, timeout=30, check=False)
+                if run.returncode:
+                    raise RuntimeError(run.stderr.strip() or "Native worker failed")
+                data, native_faces = json.loads(run.stdout), None
+            expected = "OCCT-8.1-in-process-sphere" if in_process else "OCCT-8.1-native-sphere"
+            if (data.get("schema") != 1 or data.get("backend") != expected
                     or data.get("solid_validated") is not False or len(data["faces"]) > 2):
                 raise ValueError("Unexpected native worker response")
             bound = max((f["geometric_bound"] for f in data["faces"]), default=0.0)
             if not math.isfinite(bound) or not 0 <= bound <= obj.GeometricTolerance.Value * (1+1e-12):
                 raise ValueError("Native mesh did not meet requested geometric bound")
             self._mesh = data
+            self._native_faces = native_faces
             obj.NativeFaceCount = len(data["faces"])
             obj.DisplayErrorBound = bound
-            obj.BackendStatus = "OCCT 8 native boundary; experimental, NOT a validated Part solid"
+            obj.BackendStatus = ("In-process" if in_process else "Worker") + (
+                " OCCT 8 native boundary; experimental, NOT a validated Part solid")
         except Exception as error:
+            self._mesh = None
+            self._native_faces = None
             obj.NativeFaceCount = 0
             obj.DisplayErrorBound = 0
             obj.BackendStatus = "Unsupported/failed: " + str(error)
@@ -86,6 +132,8 @@ class NativeBoundary:
 
     def onDocumentRestored(self, obj):
         self._mesh = None
+        self._native_faces = None
+        self._add_backend(obj)  # Old schema-1 recipes retain the worker backend.
         # FreeCAD clears the touched state after restoration callbacks; rebuild
         # here rather than rely on a later recompute to notice a missing cache.
         self.execute(obj)
@@ -95,6 +143,7 @@ class NativeBoundary:
 
     def loads(self, _state):
         self._mesh = None
+        self._native_faces = None
 
 
 class NativeBoundaryView:
@@ -162,14 +211,20 @@ class NativeBoundaryView:
         pass
 
 
-def create(operation="Trim"):
+def create(operation="Trim", backend="Worker"):
     """Create an editable analytic test case, not a selected-operand Part BOP."""
-    worker_path()
+    if backend == "Worker":
+        worker_path()
+    elif backend == "InProcess":
+        import ImplicitOCCT  # noqa: F401; checks ABI before creating a document object.
+    else:
+        raise ValueError("Expected Worker or InProcess backend")
     document = App.ActiveDocument or App.newDocument()
     document.openTransaction("Create experimental OCCT native boundary")
     try:
         obj = document.addObject("App::FeaturePython", "OCCTNativeBoundary")
         NativeBoundary(obj)
+        obj.Backend = backend
         obj.Operation = operation
         obj.Label = "OCCT " + operation + " (experimental boundary)"
         if App.GuiUp:

@@ -18,6 +18,21 @@ set(Implicit_SRCS
 
 add_library(Implicit SHARED ${Implicit_SRCS})
 
+# Never build/load native OCCT 8 face code against the OCCT 7 compatibility ABI.
+if(FREECAD_OCCT_BUILD_DIR AND OCC_VERSION_STRING VERSION_GREATER_EQUAL 8.0.0)
+    if(NOT EXISTS "${OCC_INCLUDE_DIR}/BRep_ImplicitTool.hxx")
+        message(FATAL_ERROR "Selected OCCT build lacks native implicit faces")
+    endif()
+    add_library(_ImplicitOCCT SHARED AppNativeOCCT.cpp)
+    target_include_directories(_ImplicitOCCT SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
+    target_link_libraries(_ImplicitOCCT PRIVATE TKBRep Python3::Python)
+    target_compile_warn_error(_ImplicitOCCT)
+    set_bin_dir(_ImplicitOCCT)
+    set_python_prefix_suffix(_ImplicitOCCT)
+    add_dependencies(Implicit _ImplicitOCCT)
+    install(TARGETS _ImplicitOCCT DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+
 # Use the fork's kernel implementation in a native source build. Compatibility
 # builds compile only the new extension against installed OCCT, without mixing
 # the fork's general headers into an older OCCT ABI.

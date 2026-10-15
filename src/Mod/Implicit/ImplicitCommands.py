@@ -259,6 +259,13 @@ def register():
                          "OCCT sphere" + ("" if operation == "Sphere" else " " + operation.lower())
                          + " (experimental boundary)",
                          lambda op=operation: ImplicitNative.create(op)))
+    try:
+        import ImplicitOCCT  # noqa: F401; never loads the private extension into OCCT 7.
+    except ImportError:
+        pass
+    else:
+        commands.append(("Implicit_OCCTInProcessSphere", "OCCT in-process sphere (experimental)",
+                         lambda: ImplicitNative.create("Sphere", backend="InProcess")))
     for name, title, action in commands:
         Gui.addCommand(name, Command(title, action))
     return [name for name, _, _ in commands]
