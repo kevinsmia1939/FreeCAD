@@ -264,8 +264,15 @@ def register():
     except ImportError:
         pass
     else:
+        import ImplicitMixed
         commands.append(("Implicit_OCCTInProcessSphere", "OCCT in-process sphere (experimental)",
                          lambda: ImplicitNative.create("Sphere", backend="InProcess")))
+        commands.append(("Implicit_OCCTMixedDemo", "Native gyroid/box demo (caps/seams only)",
+                         ImplicitMixed.demo))
+        for operation in ("Common", "BoxMinusField"):
+            commands.append(("Implicit_OCCTMixed" + operation,
+                             "Native gyroid/box " + operation + " (experimental boundary)",
+                             lambda op=operation: ImplicitMixed.selected(op)))
     for name, title, action in commands:
         Gui.addCommand(name, Command(title, action))
     return [name for name, _, _ in commands]

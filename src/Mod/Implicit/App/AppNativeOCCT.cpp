@@ -6,6 +6,8 @@
 #include <BRep_ImplicitIO.hxx>
 #include <BRep_ImplicitTool.hxx>
 #include <BRep_ImplicitSphereOps.hxx>
+#include <BRepClass3d_ImplicitBox.hxx>
+#include <BRepTools.hxx>
 #include <Geom_ImplicitSphere.hxx>
 #include <Geom_ImplicitGyroid.hxx>
 #include <Standard_DomainError.hxx>
@@ -21,6 +23,15 @@
 namespace
 {
 constexpr const char* faceName = "ImplicitOCCT.NativeFace.v1";
+constexpr const char* boundaryName = "ImplicitOCCT.HybridBoundary.v1";
+void destroyBoundary(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, boundaryName)) {
+        delete static_cast<BRepClass3d_ImplicitBox::Boundary*>(
+            PyCapsule_GetPointer(capsule, boundaryName)
+        );
+    }
+}
 struct Decref
 {
     void operator()(PyObject* p) const
@@ -440,7 +451,117 @@ PyObject* mesh(PyObject* args)
     return result.release();
 }
 
+PyObject* mixedBox(PyObject* args)
+{
+    PyObject *object, *record;
+    const char* operation;
+    double tolerance = .1;
+    int maximumCells = 512;
+    if (!PyArg_ParseTuple(args, "OUs|di", &object, &record, &operation, &tolerance, &maximumCells)) {
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    Py_ssize_t size;
+    const char* text = PyUnicode_AsUTF8AndSize(record, &size);
+    if (!text) {
+        return nullptr;
+    }
+    if (size > 4 * 1024 * 1024) {
+        throw Standard_DomainError("conventional box snapshot exceeds 4 MiB");
+    }
+    using Ops = BRepClass3d_ImplicitBox;
+    const std::string name(operation);
+    if (name != "common" && name != "box_minus_field") {
+        throw Standard_DomainError("expected common or box_minus_field; operand order is explicit");
+    }
+    std::istringstream input(std::string(text, static_cast<size_t>(size)));
+    TopoDS_Shape box;
+    BRepTools::Read(box, input, BRep_Builder());
+    if (input.fail() || box.IsNull()) {
+        throw Standard_DomainError("invalid conventional box B-Rep snapshot");
+    }
+    input >> std::ws;
+    if (!input.eof()) {
+        throw Standard_DomainError("trailing conventional box snapshot data");
+    }
+    const auto boundary = Ops::Build(
+        *face,
+        box,
+        name == "common" ? Ops::Operation::Common : Ops::Operation::BoxMinusField,
+        tolerance,
+        maximumCells
+    );
+    Object result(PyDict_New());
+    Object caps(PyList_New(0)), sources(PyList_New(0)), sections(PyList_New(0));
+    Object implicit;
+    if (!result || !caps || !sources || !sections) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < boundary.Faces.size(); ++i) {
+        if (boundary.Sources[i] == -1) {
+            implicit.reset(ownFace(boundary.Faces[i]));
+            if (!implicit) {
+                return nullptr;
+            }
+        }
+        else {
+            std::ostringstream output;
+            BRepTools::Write(boundary.Faces[i], output);
+            const auto serialized = output.str();
+            Object cap(PyUnicode_FromStringAndSize(serialized.data(), serialized.size()));
+            Object source(PyLong_FromLong(boundary.Sources[i]));
+            if (!cap || !source || PyList_Append(caps.get(), cap.get()) < 0
+                || PyList_Append(sources.get(), source.get()) < 0) {
+                return nullptr;
+            }
+        }
+    }
+    for (const auto& section : boundary.Sections) {
+        for (const auto& curve : section.Curves) {
+            Object points(PyList_New(curve.Points.size()));
+            if (!points) {
+                return nullptr;
+            }
+            for (size_t i = 0; i < curve.Points.size(); ++i) {
+                auto* p = xyz(curve.Points[i].XYZ());
+                if (!p) {
+                    return nullptr;
+                }
+                PyList_SET_ITEM(points.get(), i, p);
+            }
+            if (PyList_Append(sections.get(), points.get()) < 0) {
+                return nullptr;
+            }
+        }
+    }
+    auto owned = std::make_unique<Ops::Boundary>(boundary);
+    Object handle(PyCapsule_New(owned.get(), boundaryName, destroyBoundary));
+    if (!handle) {
+        return nullptr;
+    }
+    owned.release();
+    if (!set(result.get(), "boundary_handle", handle.release())
+        || !set(result.get(), "implicit_face", implicit.release())
+        || !set(result.get(), "planar_caps_brep", caps.release())
+        || !set(result.get(), "cap_sources", sources.release())
+        || !set(result.get(), "seams", sections.release())
+        || !set(result.get(), "seam_count", PyLong_FromLong(boundary.SeamCount))
+        || !set(result.get(), "seam_geometric_bound", PyFloat_FromDouble(boundary.GeometricBound))
+        || !set(result.get(), "solid_validated", PyBool_FromLong(0))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyMethodDef methods[] = {
+    {"mixed_box",
+     checked<mixedBox>,
+     METH_VARARGS,
+     "mixed_box(gyroid, box_brep, operation, tolerance=.1, maximum_cells=512) -> hybrid boundary, "
+     "NOT a solid"},
     {"sphere", checked<sphere>, METH_VARARGS, "sphere(center, radius, tolerance=0.1) -> native face"},
     {"gyroid",
      checked<gyroid>,
