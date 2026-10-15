@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Field.h"
+#include <vector>
 
 namespace Implicit
 {
@@ -19,7 +20,24 @@ struct ImplicitExport Domain
 class ImplicitExport Shape
 {
 public:
+    struct RayHit
+    {
+        double distance;
+        Base::Vector3d point;
+        double residual;
+        double bracketWidth;
+    };
+
     Shape(FieldPtr field, Domain domain, double tolerance, bool insideNegative = true);
+
+    // Direction is normalized; distances and tolerance are in local model units.
+    // Sampled sign brackets are not a completeness guarantee (e.g. tangencies).
+    std::vector<RayHit> intersectRay(const Base::Vector3d& origin,
+                                   const Base::Vector3d& direction,
+                                   double minimumDistance,
+                                   double maximumDistance,
+                                   int samples = 512,
+                                   double distanceTolerance = 1e-7) const;
 
     double value(const Base::Vector3d& point) const;
     Base::Vector3d gradient(const Base::Vector3d& point) const;

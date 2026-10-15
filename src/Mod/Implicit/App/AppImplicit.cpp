@@ -87,6 +87,11 @@ public:
         );
         add_varargs_method("gradient", &Module::gradient, "gradient(feature, x, y, z) -> (dx, dy, dz)");
         add_varargs_method(
+            "intersectRay", &Module::intersectRay,
+            "intersectRay(feature, origin, direction, minDistance, maxDistance, samples=512, "
+            "distanceTolerance=1e-7) -> local sampled root dictionaries; direction is normalized"
+        );
+        add_varargs_method(
             "bounds",
             &Module::bounds,
             "bounds(feature) -> effective local domain (minimum, maximum)"
@@ -135,6 +140,36 @@ public:
     }
 
 private:
+    Py::Object intersectRay(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        Base::Vector3d origin, direction;
+        double minimum, maximum, tolerance = 1e-7;
+        int samples = 512;
+        if (!PyArg_ParseTuple(args.ptr(), "O(ddd)(ddd)dd|id", &object,
+                              &origin.x, &origin.y, &origin.z,
+                              &direction.x, &direction.y, &direction.z,
+                              &minimum, &maximum, &samples, &tolerance)) {
+            throw Py::Exception();
+        }
+        const Shape shape = featureFromPython(object)->makeShape();
+        std::vector<Shape::RayHit> hits;
+        {
+            Base::PyGILStateRelease release;
+            hits = shape.intersectRay(origin, direction, minimum, maximum, samples, tolerance);
+        }
+        Py::List result;
+        for (const auto& hit : hits) {
+            Py::Dict item;
+            item["distance"] = Py::Float(hit.distance);
+            item["point"] = vectorToPython(hit.point);
+            item["residual"] = Py::Float(hit.residual);
+            item["bracket_width"] = Py::Float(hit.bracketWidth);
+            result.append(item);
+        }
+        return result;
+    }
+
     Py::Object bounds(const Py::Tuple& args)
     {
         if (args.size() != 1) {

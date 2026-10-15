@@ -32,6 +32,10 @@ def main():
     assert math.isclose(Implicit.evaluate(brep, 8, 2, 4), -2, abs_tol=1e-6)
     assert Implicit.classify(mixed, 8, 2, 4) == "inside"
     assert Implicit.classify(mixed, 8, 2, 7) == "outside"
+    roots = Implicit.intersectRay(mixed, (8, 2, 0), (0, 0, 1), 0, 8, 31, 1e-8)
+    assert len(roots) == 2, roots
+    assert all(abs(hit["distance"] - expected) < 1e-7
+               for hit, expected in zip(roots, (2, 6))), roots
     # Native representation dispatch also accepts a Part object directly.
     mixed.Left = box
     doc.recompute()
@@ -46,6 +50,7 @@ def main():
     assert Implicit.bounds(brep) != bounds_before, "live BRep domain did not follow source edit"
     assert math.isclose(Implicit.evaluate(brep, 8, 2, 4), 1, abs_tol=1e-6)
     assert Implicit.classify(mixed, 8, 2, 4) == "outside"
+    assert Implicit.intersectRay(mixed, (8, 2, 0), (0, 0, 1), 0, 8, 31) == []
     box.Length = 4
     box.Placement.Base = (20, 0, 0)
     doc.recompute()
