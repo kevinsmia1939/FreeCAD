@@ -35,6 +35,48 @@ public:
 
 using FieldPtr = std::shared_ptr<const Field>;
 
+class ImplicitExport LinearField final: public Field
+{
+public:
+    LinearField(Base::Vector3d slope, double intercept);
+    double value(const Base::Vector3d& point) const override;
+    Base::Vector3d gradient(const Base::Vector3d&) const override
+    {
+        return slope;
+    }
+    double lipschitzBound() const override;
+
+private:
+    Base::Vector3d slope;
+    double intercept;
+};
+
+class ImplicitExport VariableBandField final: public Field
+{
+public:
+    VariableBandField(FieldPtr field, FieldPtr width);
+    double value(const Base::Vector3d& point) const override;
+    Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override;
+
+private:
+    FieldPtr field, width;
+};
+
+class ImplicitExport SmoothUnionField final: public Field
+{
+public:
+    SmoothUnionField(FieldPtr left, FieldPtr right, double blend);
+    double value(const Base::Vector3d& point) const override;
+    Base::Vector3d gradient(const Base::Vector3d& point) const override;
+    double lipschitzBound() const override;
+
+private:
+    double weight(const Base::Vector3d& point) const;
+    FieldPtr left, right;
+    double blend;
+};
+
 // Evaluate an immutable operand in another feature's local coordinates.
 // sign converts positive-inside operands to the canonical negative-inside set.
 class ImplicitExport PlacedField final: public Field

@@ -87,6 +87,41 @@ FieldPtr parseNode(const Json& node, std::size_t depth, std::size_t& nodeCount)
     }
     const std::string type = typeIterator->get<std::string>();
 
+    if (type == "constant") {
+        requireOnlyMembers(node, {"type", "value"});
+        return std::make_shared<LinearField>(Base::Vector3d(), requiredNumber(node, "value"));
+    }
+    if (type == "linear") {
+        requireOnlyMembers(node, {"type", "slope", "intercept"});
+        return std::make_shared<LinearField>(
+            requiredVector(node, "slope"),
+            requiredNumber(node, "intercept")
+        );
+    }
+    if (type == "variable_band" || type == "smooth_union") {
+        requireOnlyMembers(
+            node,
+            type == "variable_band"
+                ? std::initializer_list<std::string_view> {"type", "field", "width"}
+                : std::initializer_list<std::string_view> {"type", "left", "right", "blend"}
+        );
+        const char* first = type == "variable_band" ? "field" : "left";
+        const char* second = type == "variable_band" ? "width" : "right";
+        if (!node.contains(first) || !node.contains(second)) {
+            throw std::invalid_argument("composed scalar node requires both operand fields");
+        }
+        auto a = parseNode(node.at(first), depth + 1, nodeCount);
+        auto b = parseNode(node.at(second), depth + 1, nodeCount);
+        if (type == "variable_band") {
+            return std::make_shared<VariableBandField>(std::move(a), std::move(b));
+        }
+        return std::make_shared<SmoothUnionField>(
+            std::move(a),
+            std::move(b),
+            requiredNumber(node, "blend")
+        );
+    }
+
     if (type == "box") {
         requireOnlyMembers(node, {"type", "center", "halfSize"});
         return std::make_shared<BoxField>(

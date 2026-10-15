@@ -42,6 +42,84 @@ Base::Vector3d Implicit::PlacedField::gradient(const Base::Vector3d& point) cons
 
 using namespace Implicit;
 
+LinearField::LinearField(Base::Vector3d slope, double intercept)
+    : slope(slope)
+    , intercept(intercept)
+{
+    if (!std::isfinite(slope.x) || !std::isfinite(slope.y) || !std::isfinite(slope.z)
+        || !std::isfinite(intercept)) {
+        throw std::invalid_argument("linear scalar field coefficients must be finite");
+    }
+}
+
+double LinearField::value(const Base::Vector3d& point) const
+{
+    return slope.Dot(point) + intercept;
+}
+
+double LinearField::lipschitzBound() const
+{
+    return std::hypot(slope.x, slope.y, slope.z);
+}
+
+VariableBandField::VariableBandField(FieldPtr field, FieldPtr width)
+    : field(std::move(field))
+    , width(std::move(width))
+{
+    if (!this->field || !this->width) {
+        throw std::invalid_argument("variable band requires a field and scalar width field");
+    }
+}
+
+double VariableBandField::value(const Base::Vector3d& point) const
+{
+    return std::abs(field->value(point)) - width->value(point);
+}
+
+Base::Vector3d VariableBandField::gradient(const Base::Vector3d& point) const
+{
+    return (field->value(point) < 0 ? -field->gradient(point) : field->gradient(point))
+        - width->gradient(point);
+}
+
+double VariableBandField::lipschitzBound() const
+{
+    return field->lipschitzBound() + width->lipschitzBound();
+}
+
+SmoothUnionField::SmoothUnionField(FieldPtr left, FieldPtr right, double blend)
+    : left(std::move(left))
+    , right(std::move(right))
+    , blend(blend)
+{
+    if (!this->left || !this->right || !std::isfinite(blend) || blend <= 0) {
+        throw std::invalid_argument("smooth union requires two fields and a positive finite blend");
+    }
+}
+
+double SmoothUnionField::weight(const Base::Vector3d& point) const
+{
+    return std::clamp(0.5 + 0.5 * ((right->value(point) - left->value(point)) / blend), 0.0, 1.0);
+}
+
+double SmoothUnionField::value(const Base::Vector3d& point) const
+{
+    const double a = left->value(point), b = right->value(point);
+    const double h = std::clamp(0.5 + 0.5 * ((b - a) / blend), 0.0, 1.0);
+    return std::lerp(b, a, h) - blend * h * (1 - h);
+}
+
+Base::Vector3d SmoothUnionField::gradient(const Base::Vector3d& point) const
+{
+    const double h = weight(point);
+    return left->gradient(point) * h + right->gradient(point) * (1 - h);
+}
+
+double SmoothUnionField::lipschitzBound() const
+{
+    return std::max(left->lipschitzBound(), right->lipschitzBound());
+}
+
 BoxField::BoxField(Base::Vector3d center, Base::Vector3d halfSize)
     : center(center)
     , halfSize(halfSize)

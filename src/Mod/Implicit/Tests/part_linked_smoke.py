@@ -38,6 +38,12 @@ def main():
                for hit, expected in zip(roots, (2, 6))), roots
     projection = Implicit.project(mixed, (8, 2, 6.5))
     assert projection["converged"] and abs(projection["point"][2] - 6) < 1e-7, projection
+    try:
+        Implicit.tessellateControlled(mixed, 0.5, 8, 16)
+    except RuntimeError as error:
+        assert "Lipschitz" in str(error)
+    else:
+        raise AssertionError("unbounded mixed field claimed controlled extraction support")
     # Native representation dispatch also accepts a Part object directly.
     mixed.Left = box
     doc.recompute()

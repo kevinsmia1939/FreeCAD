@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-foreach(query_test ray geometry controlled chart)
+foreach(query_test ray geometry controlled chart scalar)
     add_test(NAME Implicit${query_test}Smoke
         COMMAND $<TARGET_FILE:FreeCADMainCmd> ${CMAKE_CURRENT_SOURCE_DIR}/${query_test}_smoke.py)
     set_tests_properties(Implicit${query_test}Smoke PROPERTIES
