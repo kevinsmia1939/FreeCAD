@@ -240,6 +240,7 @@ class Command:
 
 
 def register():
+    import ImplicitNative
     commands = [
         ("Implicit_Sphere", "Implicit sphere", lambda: primitive("sphere")),
         ("Implicit_Gyroid", "Implicit gyroid", lambda: primitive("gyroid")),
@@ -251,6 +252,11 @@ def register():
         ("Implicit_Probe", "Probe selected implicit surface", start_probe),
         ("Implicit_Inspect", "Inspect implicit mesh quality", inspect_selected),
     ]
+    for operation in ("Sphere", "Trim", "Common", "Fuse", "Cut"):
+        commands.append(("Implicit_OCCT" + operation,
+                         "OCCT sphere" + ("" if operation == "Sphere" else " " + operation.lower())
+                         + " (experimental boundary)",
+                         lambda op=operation: ImplicitNative.create(op)))
     for name, title, action in commands:
         Gui.addCommand(name, Command(title, action))
     return [name for name, _, _ in commands]
