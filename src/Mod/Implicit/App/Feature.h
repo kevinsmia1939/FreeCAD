@@ -46,6 +46,16 @@ public:
     App::DocumentObjectExecReturn* execute() override;
 
     Shape makeShape() const;
+    bool affectsField(const App::Property*) const;
+    // Main-thread cache access for GUI jobs. Workers operate only on Shape copies.
+    // Resolution is the effective, already-rounded extraction grid size.
+    std::shared_ptr<const SurfaceMesh> cachedDisplayMesh(unsigned int resolution, bool adaptive) const;
+    bool storeDisplayMesh(
+        const Shape& snapshot,
+        unsigned int resolution,
+        bool adaptive,
+        std::shared_ptr<const SurfaceMesh> mesh
+    );
     std::shared_ptr<const SurfaceMesh> getDisplayMesh(
         unsigned int resolution,
         bool adaptive = false

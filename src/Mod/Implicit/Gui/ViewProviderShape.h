@@ -22,8 +22,16 @@ public:
     App::PropertyColor SurfaceColor;
     App::PropertyInteger TriangleCount;
     App::PropertyInteger CacheBuildCount;
+    App::PropertyBool BackgroundMeshing;
+    App::PropertyBool CancelMeshing;
+    App::PropertyBool Meshing;
+    App::PropertyString MeshStatus;
+    App::PropertyInteger MeshRequestId;
+    App::PropertyInteger DisplayedRequestId;
+    App::PropertyInteger MeshJobCount;
     void attach(App::DocumentObject*) override;
     void updateData(const App::Property*) override;
+    void startRestoring() override;
     void finishRestoring() override;
     void setDisplayMode(const char*) override;
     std::vector<std::string> getDisplayModes() const override;
@@ -34,6 +42,13 @@ protected:
 
 private:
     void updateMesh();
+    void uploadMesh(std::shared_ptr<const Implicit::SurfaceMesh>);
+    void clearMesh();
+    void cancelBackground();
+    void startBackground();
+    void finishBackground();
+    struct BackgroundState;
+    std::unique_ptr<BackgroundState> background;
     SoSeparator* shaded;
     SoSeparator* wire;
     SoSeparator* combined;

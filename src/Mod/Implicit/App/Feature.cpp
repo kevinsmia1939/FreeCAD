@@ -208,9 +208,9 @@ App::DocumentObjectExecReturn* Feature::execute()
         StatusMessage.setValue("");
         if (Function.isTouched() || Center.isTouched() || Radius.isTouched() || Period.isTouched()
             || IsoValue.isTouched() || DomainMin.isTouched() || DomainMax.isTouched()
-            || InsideNegative.isTouched() || FieldGraph.isTouched() || Operation.getValue() != 0
-            || Operation.isTouched() || Left.isTouched() || Right.isTouched() || Amount.isTouched()
-            || AutoDomain.isTouched()) {
+            || Tolerance.isTouched() || InsideNegative.isTouched() || FieldGraph.isTouched()
+            || Operation.getValue() != 0 || Operation.isTouched() || Left.isTouched()
+            || Right.isTouched() || Amount.isTouched() || AutoDomain.isTouched()) {
             displayMesh.reset();
             CacheRevision.setValue(CacheRevision.getValue() + 1);
         }
@@ -248,6 +248,32 @@ std::shared_ptr<const SurfaceMesh> Feature::getDisplayMesh(unsigned int resoluti
         displayAdaptive = adaptive;
     }
     return displayMesh;
+}
+
+std::shared_ptr<const SurfaceMesh> Feature::cachedDisplayMesh(unsigned int resolution, bool adaptive) const
+{
+    validateDependencies();
+    return displayResolution == resolution && displayAdaptive == adaptive ? displayMesh : nullptr;
+}
+
+bool Feature::storeDisplayMesh(
+    const Shape& snapshot,
+    unsigned int resolution,
+    bool adaptive,
+    std::shared_ptr<const SurfaceMesh> mesh
+)
+{
+    const auto current = makeShape();
+    if (!mesh || current.getField() != snapshot.getField()
+        || current.getDomain().minimum != snapshot.getDomain().minimum
+        || current.getDomain().maximum != snapshot.getDomain().maximum
+        || current.isInsideNegative() != snapshot.isInsideNegative()) {
+        return false;
+    }
+    displayMesh = std::move(mesh);
+    displayResolution = resolution;
+    displayAdaptive = adaptive;
+    return true;
 }
 
 Shape Feature::makeShape() const
@@ -412,16 +438,18 @@ Shape Feature::makeShape() const
     return *compiledShape;
 }
 
+bool Feature::affectsField(const App::Property* property) const
+{
+    return property == &Function || property == &Center || property == &Radius || property == &Period
+        || property == &IsoValue || property == &DomainMin || property == &DomainMax
+        || property == &Tolerance || property == &InsideNegative || property == &FieldGraph
+        || property == &Operation || property == &Left || property == &Right || property == &Amount
+        || property == &AutoDomain || (property == &Placement && Operation.getValue() != 0);
+}
+
 void Feature::onChanged(const App::Property* property)
 {
-    if (property == &Function || property == &Center || property == &Radius || property == &Period
-        || property == &IsoValue || property == &DomainMin || property == &DomainMax
-        || property == &Tolerance || property == &InsideNegative || property == &FieldGraph) {
-        compiledShape.reset();
-        displayMesh.reset();
-    }
-    if (property == &Operation || property == &Left || property == &Right || property == &Amount
-        || property == &AutoDomain || (property == &Placement && Operation.getValue() != 0)) {
+    if (affectsField(property)) {
         compiledShape.reset();
         displayMesh.reset();
     }
