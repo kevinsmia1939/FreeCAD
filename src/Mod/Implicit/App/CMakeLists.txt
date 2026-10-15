@@ -18,19 +18,26 @@ set(Implicit_SRCS
 
 add_library(Implicit SHARED ${Implicit_SRCS})
 
-# Build this fork's new OCCT class against the selected OCCT libraries. This
-# permits testing the extension with system OCCT without replacing system libs.
+# Use the fork's kernel implementation in a native source build. Compatibility
+# builds compile only the new extension against installed OCCT, without mixing
+# the fork's general headers into an older OCCT ABI.
 set(IMPLICIT_OCCT_SOURCE_DIR "" CACHE PATH "OCCT fork source with signed-distance extension")
 if(IMPLICIT_OCCT_SOURCE_DIR)
     set(_implicit_occt_dir "${IMPLICIT_OCCT_SOURCE_DIR}/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d")
     if(NOT EXISTS "${_implicit_occt_dir}/BRepClass3d_SignedDistance.cxx")
         message(FATAL_ERROR "OCCT fork signed-distance source missing")
     endif()
-    target_sources(Implicit PRIVATE BRepField.cpp BRepField.h
-        "${_implicit_occt_dir}/BRepClass3d_SignedDistance.cxx")
-    configure_file("${_implicit_occt_dir}/BRepClass3d_SignedDistance.hxx"
-        "${CMAKE_CURRENT_BINARY_DIR}/occt-implicit-include/BRepClass3d_SignedDistance.hxx" COPYONLY)
-    target_include_directories(Implicit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/occt-implicit-include")
+    target_sources(Implicit PRIVATE BRepField.cpp BRepField.h)
+    if(FREECAD_OCCT_BUILD_DIR)
+        if(NOT EXISTS "${OCC_INCLUDE_DIR}/BRepClass3d_SignedDistance.hxx")
+            message(FATAL_ERROR "Selected OCCT build lacks the fork's signed-distance extension")
+        endif()
+    else()
+        target_sources(Implicit PRIVATE "${_implicit_occt_dir}/BRepClass3d_SignedDistance.cxx")
+        configure_file("${_implicit_occt_dir}/BRepClass3d_SignedDistance.hxx"
+            "${CMAKE_CURRENT_BINARY_DIR}/occt-implicit-include/BRepClass3d_SignedDistance.hxx" COPYONLY)
+        target_include_directories(Implicit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/occt-implicit-include")
+    endif()
     target_include_directories(Implicit SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
     target_link_directories(Implicit PRIVATE ${OCC_LIBRARY_DIR})
     target_link_libraries(Implicit ${OCC_LIBRARIES})
