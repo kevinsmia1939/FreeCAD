@@ -7,6 +7,7 @@
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 using namespace Implicit;
@@ -80,6 +81,79 @@ PointClassification Shape::classify(const Base::Vector3d& point) const
 bool Shape::contains(const Base::Vector3d& point) const
 {
     return domain.contains(point) && classify(point) != PointClassification::Outside;
+}
+
+Shape::Chart Shape::sampleChart(
+    const Base::Vector3d& seed,
+    double width,
+    double height,
+    double depth,
+    int pointCount,
+    int raySamples,
+    double distanceTolerance,
+    double minimumAlignment,
+    const std::atomic_bool* cancelled
+) const
+{
+    if (!std::isfinite(width) || width <= 0 || !std::isfinite(height) || height <= 0
+        || !std::isfinite(depth) || depth <= 0 || !std::isfinite(distanceTolerance)
+        || distanceTolerance <= 0 || !std::isfinite(minimumAlignment) || minimumAlignment <= 0
+        || minimumAlignment > 1 || pointCount < 4 || pointCount > 33 || raySamples < 2
+        || raySamples > 4096 || pointCount * pointCount * raySamples > 262144) {
+        throw std::invalid_argument("invalid chart dimensions, tolerances or sampling budget");
+    }
+    const auto check = [cancelled] {
+        if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+            throw std::runtime_error("implicit operation cancelled");
+        }
+    };
+    check();
+    const auto projection = project(seed, distanceTolerance);
+    if (!projection.converged) {
+        throw std::runtime_error(std::string("chart seed projection failed: ") + projection.status);
+    }
+    Chart chart;
+    chart.center = projection.point;
+    chart.normal = gradient(chart.center);
+    chart.normal /= std::hypot(chart.normal.x, chart.normal.y, chart.normal.z);
+    const Base::Vector3d reference = std::abs(chart.normal.x) < 0.8 ? Base::Vector3d(1, 0, 0)
+                                                                    : Base::Vector3d(0, 1, 0);
+    chart.u = reference.Cross(chart.normal);
+    chart.u.Normalize();
+    chart.v = chart.normal.Cross(chart.u);
+    chart.count = pointCount;
+    chart.points.reserve(pointCount * pointCount);
+    for (int u = 0; u < pointCount; ++u) {
+        for (int v = 0; v < pointCount; ++v) {
+            check();
+            const auto origin = chart.center
+                + chart.u * (width * (double(u) / (pointCount - 1) - 0.5))
+                + chart.v * (height * (double(v) / (pointCount - 1) - 0.5));
+            const auto roots
+                = intersectRay(origin, chart.normal, -depth, depth, raySamples, distanceTolerance);
+            if (roots.size() != 1) {
+                throw std::runtime_error(
+                    "chart ray requires exactly one sampled root; shrink the patch or depth"
+                );
+            }
+            const auto& hit = roots.front();
+            const auto g = gradient(hit.point);
+            const double length = std::hypot(g.x, g.y, g.z);
+            if (!std::isfinite(length) || length == 0) {
+                throw std::runtime_error("chart encountered a critical point");
+            }
+            const double alignment = g.Dot(chart.normal) / length;
+            if (alignment < minimumAlignment) {
+                throw std::runtime_error(
+                    "chart normal alignment failed; patch may fold or cross a crease"
+                );
+            }
+            chart.minimumAlignment = std::min(chart.minimumAlignment, alignment);
+            chart.maxResidual = std::max(chart.maxResidual, hit.residual);
+            chart.points.push_back(hit.point);
+        }
+    }
+    return chart;
 }
 
 Shape::Projection Shape::project(

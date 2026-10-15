@@ -87,6 +87,13 @@ public:
         );
         add_varargs_method("gradient", &Module::gradient, "gradient(feature, x, y, z) -> (dx, dy, dz)");
         add_varargs_method(
+            "sampleChart",
+            &Module::sampleChart,
+            "sampleChart(feature, seed, width, height, depth, pointCount=9, raySamples=128, "
+            "distanceTolerance=1e-9, minimumAlignment=0.2, cancellationToken=None) -> local height "
+            "chart"
+        );
+        add_varargs_method(
             "project",
             &Module::project,
             "project(feature, point, distanceTolerance=1e-7, fieldTolerance=1e-9, "
@@ -154,10 +161,84 @@ public:
             &Module::cancel,
             "cancel(token) -> request cancellation of extraction using token"
         );
+        add_varargs_method(
+            "isCancelled",
+            &Module::isCancelled,
+            "isCancelled(token) -> current one-shot cancellation state"
+        );
         initialize("Native implicit geometry primitives for FreeCAD.");
     }
 
 private:
+    Py::Object isCancelled(const Py::Tuple& args)
+    {
+        if (args.size() != 1) {
+            throw Py::TypeError("isCancelled expects (token)");
+        }
+        return Py::Boolean(cancellationFromPython(args[0].ptr())->load(std::memory_order_relaxed));
+    }
+
+    Py::Object sampleChart(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        PyObject* token = Py_None;
+        Base::Vector3d seed;
+        double width, height, depth, tolerance = 1e-9, alignment = 0.2;
+        int count = 9, samples = 128;
+        if (!PyArg_ParseTuple(
+                args.ptr(),
+                "O(ddd)ddd|iiddO",
+                &object,
+                &seed.x,
+                &seed.y,
+                &seed.z,
+                &width,
+                &height,
+                &depth,
+                &count,
+                &samples,
+                &tolerance,
+                &alignment,
+                &token
+            )) {
+            throw Py::Exception();
+        }
+        const Shape shape = featureFromPython(object)->makeShape();
+        const auto* cancelled = token == Py_None ? nullptr : cancellationFromPython(token);
+        Shape::Chart chart;
+        {
+            Base::PyGILStateRelease release;
+            chart = shape.sampleChart(
+                seed,
+                width,
+                height,
+                depth,
+                count,
+                samples,
+                tolerance,
+                alignment,
+                cancelled
+            );
+        }
+        Py::List points;
+        for (int u = 0; u < chart.count; ++u) {
+            Py::List row;
+            for (int v = 0; v < chart.count; ++v) {
+                row.append(vectorToPython(chart.points[u * chart.count + v]));
+            }
+            points.append(row);
+        }
+        Py::Dict result;
+        result["points"] = points;
+        result["center"] = vectorToPython(chart.center);
+        result["u_axis"] = vectorToPython(chart.u);
+        result["v_axis"] = vectorToPython(chart.v);
+        result["normal"] = vectorToPython(chart.normal);
+        result["max_residual"] = Py::Float(chart.maxResidual);
+        result["minimum_alignment"] = Py::Float(chart.minimumAlignment);
+        return result;
+    }
+
     Py::Object tessellateControlled(const Py::Tuple& args)
     {
         PyObject* object = nullptr;

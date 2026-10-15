@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Field.h"
+#include <atomic>
 #include <vector>
 
 namespace Implicit
@@ -20,6 +21,28 @@ struct ImplicitExport Domain
 class ImplicitExport Shape
 {
 public:
+    struct Chart
+    {
+        Base::Vector3d center, u, v, normal;
+        std::vector<Base::Vector3d> points;
+        double maxResidual = 0;
+        double minimumAlignment = 1;
+        int count = 0;
+    };
+
+    // Experimental fixed-normal height chart; sampled uniqueness only.
+    Chart sampleChart(
+        const Base::Vector3d& seed,
+        double width,
+        double height,
+        double depth,
+        int pointCount = 9,
+        int raySamples = 128,
+        double distanceTolerance = 1e-9,
+        double minimumAlignment = 0.2,
+        const std::atomic_bool* cancelled = nullptr
+    ) const;
+
     struct Projection
     {
         Base::Vector3d point;
