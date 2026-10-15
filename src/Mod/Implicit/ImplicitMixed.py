@@ -15,6 +15,7 @@ class MixedBoundary:
             ("MixedSchema", "Integer", 1), ("Field", "Link", None),
             ("Box", "Link", None), ("GeometricTolerance", "Length", .1),
             ("MaximumCells", "Integer", 512), ("SeamCount", "Integer", 0),
+            ("BoxEdgeRootCount", "Integer", 0),
             ("PlanarCapCount", "Integer", 0), ("SeamGeometricBound", "Float", 0),
             ("BackendStatus", "String", ""), ("NativeRevision", "Integer", 0)):
             obj.addProperty("App::Property" + kind, name, "Native mixed boundary")
@@ -22,7 +23,7 @@ class MixedBoundary:
                 setattr(obj, name, value)
         obj.addProperty("App::PropertyEnumeration", "Operation", "Native mixed boundary")
         obj.Operation = ["Common", "BoxMinusField"]
-        for name in ("MixedSchema", "SeamCount", "PlanarCapCount", "SeamGeometricBound", "BackendStatus"):
+        for name in ("MixedSchema", "SeamCount", "BoxEdgeRootCount", "PlanarCapCount", "SeamGeometricBound", "BackendStatus"):
             obj.setEditorMode(name, 1)
         obj.setEditorMode("NativeRevision", 2)
         obj.Proxy = self
@@ -42,6 +43,10 @@ class MixedBoundary:
     def execute(self, obj):
         self._boundary = self._mesh = self._section = None
         obj.SeamCount = obj.PlanarCapCount = 0
+        if "BoxEdgeRootCount" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyInteger", "BoxEdgeRootCount", "Native mixed boundary")
+            obj.setEditorMode("BoxEdgeRootCount", 1)
+        obj.BoxEdgeRootCount = 0
         obj.SeamGeometricBound = 0
         try:
             import ImplicitOCCT as native
@@ -73,12 +78,14 @@ class MixedBoundary:
             self._section = {"curves": [{"points": p} for p in data["seams"]]}
             self._boundary = data
             obj.SeamCount, obj.PlanarCapCount = data["seam_count"], len(data["planar_caps"])
+            obj.BoxEdgeRootCount = data["box_edge_root_count"]
             obj.SeamGeometricBound = data["seam_geometric_bound"]
             obj.BackendStatus = ("Native hybrid boundary; caps/seams preview only; "
                                  "NOT a validated Part solid or conforming surface mesh")
         except Exception as error:
             self._boundary = self._mesh = self._section = None
             obj.SeamCount = obj.PlanarCapCount = 0
+            obj.BoxEdgeRootCount = 0
             obj.SeamGeometricBound = 0
             obj.BackendStatus = "Unsupported/failed: " + str(error)
             raise
@@ -168,8 +175,8 @@ def selected(operation="Common"):
     return create(fields[0], boxes[0], operation)
 
 
-def demo(operation="Common"):
-    """A supported single-loop fixture; creates real live-linked operands."""
+def demo(operation="Common", open_contours=False):
+    """Supported closed-loop or zero-isovalue edge-crossing live operands."""
     import ImplicitOCCT  # noqa: F401
     document = App.newDocument("NativeMixedDemo")
     field = document.addObject("Implicit::Feature", "Gyroid")
@@ -178,6 +185,10 @@ def demo(operation="Common"):
     box = document.addObject("Part::Box", "Box")
     box.Length, box.Width, box.Height = 3.24, 3.28, 2.75
     box.Placement.Base = (-.31, -.37, 1.25)
+    if open_contours:
+        field.IsoValue = 0
+        box.Length, box.Width, box.Height = 8, 8, 6.04
+        box.Placement.Base = (-3.83, -4.07, -2.67)
     document.recompute()
     result = create(field, box, operation)
     if App.GuiUp:

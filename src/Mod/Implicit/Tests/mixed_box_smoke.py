@@ -49,6 +49,12 @@ def main():
         assert obj.Field.Name == field_name and obj.Box.Name == box_name
         assert obj.Proxy.native_boundary()["seam_count"] == 1
     obj.Field.IsoValue = 0
+    doc.recompute()
+    assert obj.isValid(), obj.BackendStatus
+    assert obj.BoxEdgeRootCount > 0
+    assert obj.Proxy.native_boundary()["box_edge_root_count"] == obj.BoxEdgeRootCount
+    assert obj.SeamGeometricBound <= .1
+    obj.MaximumCells = 4
     # Explicit execute verifies error propagation without treating the expected
     # document recompute diagnostic as an unexpected smoke-test traceback.
     try:
@@ -56,7 +62,7 @@ def main():
     except (ValueError, NotImplementedError):
         pass
     else:
-        raise AssertionError("unsupported box-edge intersections succeeded")
+        raise AssertionError("unresolved low-budget sections succeeded")
     assert obj.Proxy._boundary is None and obj.Proxy._mesh is None
     assert obj.SeamCount == 0 and obj.SeamGeometricBound == 0
     for bad in (Part.makeCylinder(1, 2), Part.makePlane(1, 2)):

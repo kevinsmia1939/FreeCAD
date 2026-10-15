@@ -269,6 +269,8 @@ def register():
                          lambda: ImplicitNative.create("Sphere", backend="InProcess")))
         commands.append(("Implicit_OCCTMixedDemo", "Native gyroid/box demo (caps/seams only)",
                          ImplicitMixed.demo))
+        commands.append(("Implicit_OCCTOpenBoxDemo", "Native zero-gyroid/box demo (caps/seams only)",
+                         lambda: ImplicitMixed.demo(open_contours=True)))
         for operation in ("Common", "BoxMinusField"):
             commands.append(("Implicit_OCCTMixed" + operation,
                              "Native gyroid/box " + operation + " (experimental boundary)",

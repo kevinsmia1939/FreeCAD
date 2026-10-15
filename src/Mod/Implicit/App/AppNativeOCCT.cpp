@@ -549,6 +549,7 @@ PyObject* mixedBox(PyObject* args)
         || !set(result.get(), "cap_sources", sources.release())
         || !set(result.get(), "seams", sections.release())
         || !set(result.get(), "seam_count", PyLong_FromLong(boundary.SeamCount))
+        || !set(result.get(), "box_edge_root_count", PyLong_FromLong(boundary.BoxEdgeRootCount))
         || !set(result.get(), "seam_geometric_bound", PyFloat_FromDouble(boundary.GeometricBound))
         || !set(result.get(), "solid_validated", PyBool_FromLong(0))) {
         return nullptr;

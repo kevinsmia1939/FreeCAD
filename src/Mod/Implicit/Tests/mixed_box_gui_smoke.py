@@ -35,17 +35,26 @@ def main():
         view = obj.ViewObject.Proxy
         assert view._coordinates.point.getNum() > 0 and view._seam_coordinates.point.getNum() > 0
     obj.Field.IsoValue = 0
+    doc.recompute()
+    assert obj.isValid() and obj.BoxEdgeRootCount > 0, obj.BackendStatus
+    assert view._coordinates.point.getNum() > 0 and view._seam_coordinates.point.getNum() > 0
+    obj.MaximumCells = 4
     try:
         obj.Proxy.execute(obj)
     except (ValueError, NotImplementedError):
         pass
     else:
-        raise AssertionError("unsupported clipping returned a successful boundary")
+        raise AssertionError("unresolved sections returned a successful boundary")
     assert view._coordinates.point.getNum() == 0 and view._seam_coordinates.point.getNum() == 0
     assert obj.Proxy._boundary is None
     obj.Field.IsoValue = 1.45
+    obj.MaximumCells = 512
     doc.recompute()
     assert obj.isValid() and obj.SeamCount == 1
+    other = ImplicitMixed.demo(open_contours=True)
+    assert other.isValid() and other.BoxEdgeRootCount > 4
+    assert other.SeamGeometricBound <= .1
+    App.closeDocument(other.Document.Name)
     App.closeDocument(doc.Name)
     assert native.value(old, (1, 1, 1)) > -1
     print("native implicit mixed box GUI smoke test passed", flush=True)

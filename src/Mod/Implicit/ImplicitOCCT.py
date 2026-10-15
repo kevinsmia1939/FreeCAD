@@ -30,7 +30,8 @@ def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
 
     Planar caps are independent conventional Part faces. The opaque native face
     retains shared seam topology internally; do not sew caps into a fake solid.
-    Only closed, resolved, single contours away from box edges are supported.
+    Resolved open/closed contours share certified box-edge roots; ambiguous
+    corner/tangent cases reject. Planar caps may contain multiple regions/holes.
     """
     if not isinstance(box, Part.Shape):
         raise TypeError("box must be a conventional Part.Shape")
