@@ -305,9 +305,20 @@ SurfaceMesh tessellateAdaptive(const Shape& shape, unsigned int resolution, cons
     return Extractor(shape, resolution, true, cancelled).run();
 }
 
-MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh)
+MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh, const std::atomic_bool* cancelled)
 {
     MeshQuality quality;
+    const auto check = [cancelled] {
+        if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+            throw std::runtime_error("implicit operation cancelled");
+        }
+    };
+    check();
+    const double lipschitz = shape.lipschitzBound();
+    const bool bounded = std::isfinite(lipschitz) && lipschitz >= 0;
+    if (!bounded) {
+        quality.maxTriangleResidualBound = std::numeric_limits<double>::infinity();
+    }
     struct Incidence
     {
         std::size_t count = 0;
@@ -315,9 +326,11 @@ MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh)
     };
     std::unordered_map<Edge, Incidence, EdgeHash> edges;
     for (const auto& vertex : mesh.vertices) {
+        check();
         quality.maxVertexResidual = std::max(quality.maxVertexResidual, std::abs(shape.value(vertex)));
     }
     for (const auto& triangle : mesh.triangles) {
+        check();
         const auto& a = mesh.vertices.at(triangle[0]);
         const auto& b = mesh.vertices.at(triangle[1]);
         const auto& c = mesh.vertices.at(triangle[2]);
@@ -325,8 +338,19 @@ MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh)
         if (std::hypot(normal.x, normal.y, normal.z) == 0) {
             ++quality.degenerateTriangles;
         }
-        quality.maxCentroidResidual
-            = std::max(quality.maxCentroidResidual, std::abs(shape.value(a / 3 + b / 3 + c / 3)));
+        const auto center = a / 3 + b / 3 + c / 3;
+        const double residual = std::abs(shape.value(center));
+        quality.maxCentroidResidual = std::max(quality.maxCentroidResidual, residual);
+        if (bounded) {
+            const auto norm = [](const Base::Vector3d& v) {
+                return std::hypot(v.x, v.y, v.z);
+            };
+            const double radius = std::max({norm(a - center), norm(b - center), norm(c - center)});
+            // Every point of the triangle lies within this radius of its centroid.
+            // Floating-point allowance, not an interval-arithmetic certificate.
+            const double bound = (residual + lipschitz * radius) * (1 + 1e-12) + 1e-12;
+            quality.maxTriangleResidualBound = std::max(quality.maxTriangleResidualBound, bound);
+        }
         for (int side = 0; side < 3; ++side) {
             const auto first = triangle[side];
             const auto second = triangle[(side + 1) % 3];
@@ -343,6 +367,7 @@ MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh)
         }
     }
     for (const auto& [key, edge] : edges) {
+        check();
         if (edge.count == 1) {
             ++quality.boundaryEdges;
         }
@@ -354,6 +379,52 @@ MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh)
         }
     }
     return quality;
+}
+
+ControlledMesh tessellateControlled(
+    const Shape& shape,
+    double fieldTolerance,
+    unsigned int minimumResolution,
+    unsigned int maximumResolution,
+    const std::atomic_bool* cancelled
+)
+{
+    const auto validResolution = [](unsigned int resolution) {
+        return resolution >= 2 && resolution <= 64 && (resolution & (resolution - 1)) == 0;
+    };
+    if (!std::isfinite(fieldTolerance) || fieldTolerance <= 0 || !validResolution(minimumResolution)
+        || !validResolution(maximumResolution) || minimumResolution > maximumResolution) {
+        throw std::invalid_argument(
+            "controlled extraction requires a positive finite field tolerance "
+            "and ordered power-of-two resolutions in 2..64"
+        );
+    }
+    if (!std::isfinite(shape.lipschitzBound()) || shape.lipschitzBound() < 0) {
+        throw std::invalid_argument(
+            "controlled extraction requires a finite conservative field Lipschitz bound"
+        );
+    }
+    ControlledMesh result;
+    for (unsigned int resolution = minimumResolution; resolution <= maximumResolution;
+         resolution *= 2) {
+        // Drop the previous full mesh before allocating the next level.
+        result.mesh = SurfaceMesh();
+        result.mesh = tessellateAdaptive(shape, resolution, cancelled);
+        result.quality = inspectMesh(shape, result.mesh, cancelled);
+        result.history.push_back(
+            {resolution, result.mesh.triangles.size(), result.quality.maxTriangleResidualBound}
+        );
+        if (!result.mesh.triangles.empty()
+            && result.quality.maxTriangleResidualBound <= fieldTolerance) {
+            result.toleranceMet = true;
+            result.status = "field_bound_met";
+            return result;
+        }
+    }
+    if (result.mesh.triangles.empty()) {
+        result.status = "empty_unverified";
+    }
+    return result;
 }
 
 }  // namespace Implicit

@@ -99,6 +99,12 @@ public:
             "report"
         );
         add_varargs_method(
+            "tessellateControlled",
+            &Module::tessellateControlled,
+            "tessellateControlled(feature, fieldTolerance, minResolution=8, maxResolution=64, "
+            "cancellationToken=None) -> mesh, triangle field bound and refinement history"
+        );
+        add_varargs_method(
             "intersectRay", &Module::intersectRay,
             "intersectRay(feature, origin, direction, minDistance, maxDistance, samples=512, "
             "distanceTolerance=1e-7) -> local sampled root dictionaries; direction is normalized"
@@ -152,6 +158,39 @@ public:
     }
 
 private:
+    Py::Object tessellateControlled(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        PyObject* token = Py_None;
+        double tolerance;
+        int minimum = 8, maximum = 64;
+        if (!PyArg_ParseTuple(args.ptr(), "Od|iiO", &object, &tolerance, &minimum, &maximum, &token)) {
+            throw Py::Exception();
+        }
+        const Shape shape = featureFromPython(object)->makeShape();
+        const auto* cancelled = token == Py_None ? nullptr : cancellationFromPython(token);
+        ControlledMesh extraction;
+        {
+            Base::PyGILStateRelease release;
+            extraction = Implicit::tessellateControlled(shape, tolerance, minimum, maximum, cancelled);
+        }
+        Py::Dict result = meshToPython(extraction.mesh);
+        result["quality"] = qualityToPython(extraction.mesh, extraction.quality);
+        result["tolerance_met"] = Py::Boolean(extraction.toleranceMet);
+        result["surface_coverage_verified"] = Py::Boolean(false);
+        result["status"] = Py::String(extraction.status);
+        Py::List history;
+        for (const auto& step : extraction.history) {
+            Py::Dict entry;
+            entry["resolution"] = Py::Long(static_cast<unsigned long>(step.resolution));
+            entry["triangles"] = Py::Long(step.triangles);
+            entry["residual_bound"] = Py::Float(step.residualBound);
+            history.append(entry);
+        }
+        result["history"] = history;
+        return result;
+    }
+
     Py::Object inspectTessellation(const Py::Tuple& args)
     {
         PyObject* object = nullptr;
@@ -169,7 +208,13 @@ private:
                             : Implicit::tessellate(shape, resolution);
             quality = inspectMesh(shape, mesh);
         }
+        return qualityToPython(mesh, quality);
+    }
+
+    Py::Dict qualityToPython(const SurfaceMesh& mesh, const MeshQuality& quality)
+    {
         Py::Dict result;
+        result["max_triangle_residual_bound"] = Py::Float(quality.maxTriangleResidualBound);
         result["vertices"] = Py::Long(mesh.vertices.size());
         result["triangles"] = Py::Long(mesh.triangles.size());
         result["max_vertex_residual"] = Py::Float(quality.maxVertexResidual);
@@ -380,6 +425,11 @@ private:
                 ? Implicit::tessellateAdaptive(shape, static_cast<unsigned int>(resolution), cancelled)
                 : Implicit::tessellate(shape, static_cast<unsigned int>(resolution), cancelled);
         }
+        return meshToPython(mesh);
+    }
+
+    Py::Dict meshToPython(const SurfaceMesh& mesh)
+    {
         Py::List vertices;
         Py::List normals;
         Py::List triangles;

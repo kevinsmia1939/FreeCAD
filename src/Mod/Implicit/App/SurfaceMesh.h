@@ -25,6 +25,7 @@ struct ImplicitExport SurfaceMesh
 
 struct ImplicitExport MeshQuality
 {
+    double maxTriangleResidualBound = 0;
     double maxVertexResidual = 0;
     double maxCentroidResidual = 0;
     double maxEdgeMidpointResidual = 0;
@@ -35,7 +36,33 @@ struct ImplicitExport MeshQuality
 };
 
 // Sampled field residuals, not a geometric/Hausdorff error certificate.
-ImplicitExport MeshQuality inspectMesh(const Shape& shape, const SurfaceMesh& mesh);
+ImplicitExport MeshQuality
+inspectMesh(const Shape& shape, const SurfaceMesh& mesh, const std::atomic_bool* cancelled = nullptr);
+
+struct ImplicitExport RefinementStep
+{
+    unsigned int resolution;
+    std::size_t triangles;
+    double residualBound;
+};
+
+struct ImplicitExport ControlledMesh
+{
+    SurfaceMesh mesh;
+    MeshQuality quality;
+    std::vector<RefinementStep> history;
+    bool toleranceMet = false;
+    const char* status = "resolution_limit";
+};
+
+// Global grid refinement, not variable-resolution cells or a coverage guarantee.
+ImplicitExport ControlledMesh tessellateControlled(
+    const Shape& shape,
+    double fieldTolerance,
+    unsigned int minimumResolution = 8,
+    unsigned int maximumResolution = 64,
+    const std::atomic_bool* cancelled = nullptr
+);
 
 ImplicitExport SurfaceMesh tessellate(
     const Shape& shape,
