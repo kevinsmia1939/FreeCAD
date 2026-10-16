@@ -1002,7 +1002,119 @@ PyObject* checkBoxRegularity(PyObject* args)
     return result.release();
 }
 
-template<bool Mixed>
+template<class Range, class Convert>
+PyObject* convertedList(const Range& values, Convert convert)
+{
+    Object result(PyList_New(values.size()));
+    if (!result) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < values.size(); ++i) {
+        auto* value = convert(values[i]);
+        if (!value) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(result.get(), i, value);
+    }
+    return result.release();
+}
+
+PyObject* regionTopologyReport(const BRepClass3d_ImplicitBox::RegionTopologyWitness& report)
+{
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:O,s:O,s:O,s:O,s:s,s:K,s:K,s:i,s:i}",
+        "whole_box_homotopy_resolved",
+        report.Surface.HomotopyResolved ? Py_True : Py_False,
+        "surface_reference_manifold",
+        report.Surface.ReferenceManifold ? Py_True : Py_False,
+        "closed_reference_manifold",
+        report.ClosedReferenceManifold ? Py_True : Py_False,
+        "stored_trim_correspondence_validated",
+        Py_False,
+        "native_shell_constructed",
+        Py_False,
+        "topology_validated",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "geometry_accuracy_verified",
+        Py_False,
+        "reason",
+        report.Reason.c_str(),
+        "reference_implicit_vertex_count",
+        static_cast<unsigned long long>(report.Surface.Nodes.size()),
+        "reference_implicit_triangle_count",
+        static_cast<unsigned long long>(report.Surface.Triangles.size()),
+        "resolution",
+        report.Surface.Resolution,
+        "unresolved_dimension",
+        report.Surface.UnresolvedDimension
+    ));
+    if (!result) {
+        return nullptr;
+    }
+    const auto integer = [](int value) {
+        return PyLong_FromLong(value);
+    };
+    if (!set(
+            result.get(),
+            "reference_vertices",
+            convertedList(report.Nodes, [](const gp_Pnt& p) { return xyz(p.XYZ()); })
+        )
+        || !set(
+            result.get(),
+            "reference_triangles",
+            convertedList(
+                report.Triangles,
+                [](const auto& t) { return Py_BuildValue("(iii)", t[0], t[1], t[2]); }
+            )
+        )
+        || !set(result.get(), "reference_triangle_sides", convertedList(report.TriangleSides, integer))
+        || !set(
+            result.get(),
+            "reference_triangle_components",
+            convertedList(report.TriangleComponents, integer)
+        )
+        || !set(result.get(), "reference_component_euler", convertedList(report.ComponentEuler, integer))
+        || !set(result.get(), "reference_region_count", PyLong_FromLong(report.RegionCount))
+        || !set(result.get(), "reference_component_regions", convertedList(report.ComponentRegions, integer))
+        || !set(
+            result.get(),
+            "reference_region_volumes",
+            convertedList(
+                report.RegionVolumes,
+                [](double value) { return PyFloat_FromDouble(value); }
+            )
+        )
+        || !set(
+            result.get(),
+            "reference_component_signed_volumes",
+            convertedList(
+                report.ComponentSignedVolumes,
+                [](double value) { return PyFloat_FromDouble(value); }
+            )
+        )
+        || !set(
+            result.get(),
+            "reference_surface_component_euler",
+            convertedList(report.Surface.ComponentEuler, integer)
+        )
+        || !set(
+            result.get(),
+            "reference_surface_boundary_loops",
+            convertedList(
+                report.Surface.BoundaryLoops,
+                [&](const auto& path) { return convertedList(path, integer); }
+            )
+        )
+        || !set(result.get(), "unresolved_minimum", xyz(report.Surface.UnresolvedMinimum.XYZ()))
+        || !set(result.get(), "unresolved_maximum", xyz(report.Surface.UnresolvedMaximum.XYZ()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+template<bool Mixed, bool Region = false>
 PyObject* checkBoxTopology(PyObject* args)
 {
     PyObject* object;
@@ -1030,6 +1142,11 @@ PyObject* checkBoxTopology(PyObject* args)
         if (!face) {
             return nullptr;
         }
+    }
+    if constexpr (Region) {
+        return regionTopologyReport(
+            BRepClass3d_ImplicitBox::CheckRegionTopology(*face, resolution, depth, size_t(cells))
+        );
     }
     const auto report = BRepClass3d_ImplicitBox::CheckTopology(*face, resolution, depth, size_t(cells));
     Object result(Py_BuildValue(
@@ -1188,6 +1305,21 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"check_box_region_topology",
+     checked<checkBoxTopology<false, true>>,
+     METH_VARARGS,
+     "check_box_region_topology(native_gyroid_face, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000) "
+     "-> closed nodal-linear field-and-box-cap reference, component grouping and signed volume "
+     "diagnostics. "
+     "NOT stored-native correspondence, geometric accuracy or native shell/solid construction."},
+    {"check_mixed_region_topology",
+     checked<checkBoxTopology<true, true>>,
+     METH_VARARGS,
+     "check_mixed_region_topology(boundary_handle, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000) "
+     "-> checks its mathematical box region, not stored trim/cap equivalence or native-solid "
+     "validity."},
     {"check_box_topology",
      checked<checkBoxTopology<false>>,
      METH_VARARGS,
