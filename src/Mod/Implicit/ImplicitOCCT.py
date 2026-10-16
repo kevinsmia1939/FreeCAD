@@ -21,7 +21,7 @@ if (_spec is None or _spec.origin is None
 
 from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, info,
                           intersect_ray, dumps, loads, translated, trim,
-                          boolean_faces, tessellate, kernel_version)
+                          boolean_faces, tessellate, kernel_version, classify_mixed)
 from _ImplicitOCCT import mixed_box as _mixed_box
 
 

@@ -40,6 +40,18 @@ class MixedBoundary:
         data["seams"] = [list(points) for points in data["seams"]]
         return data
 
+    def classify(self, point, distance_tolerance=.1):
+        """Query last successful native region snapshot, not the preview mesh.
+
+        Returns inside/outside only with a distance lower bound exceeding the
+        requested model-length tolerance. Near-boundary requires a witness;
+        otherwise reports unresolved. This is not native-solid validation.
+        """
+        import ImplicitOCCT as native
+        if self._boundary is None:
+            raise RuntimeError("No successful native mixed-boundary recompute")
+        return native.classify_mixed(self._boundary["boundary_handle"], tuple(point), distance_tolerance)
+
     def execute(self, obj):
         self._boundary = self._mesh = self._section = None
         obj.SeamCount = obj.PlanarCapCount = 0

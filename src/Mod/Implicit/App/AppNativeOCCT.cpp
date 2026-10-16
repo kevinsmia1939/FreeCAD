@@ -557,7 +557,79 @@ PyObject* mixedBox(PyObject* args)
     return result.release();
 }
 
+PyObject* classifyMixed(PyObject* args)
+{
+    PyObject *object, *coordinate;
+    double tolerance = .1;
+    gp_Pnt p;
+    if (!PyArg_ParseTuple(args, "OO|d", &object, &coordinate, &tolerance)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!point(coordinate, p)) {
+        return nullptr;
+    }
+    using Ops = BRepClass3d_ImplicitBox;
+    const auto* boundary = static_cast<const Ops::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto query = Ops::Classify(*boundary, p, tolerance);
+    const char* state = "unresolved";
+    switch (query.State) {
+        case Ops::PointState::Inside:
+            state = "inside";
+            break;
+        case Ops::PointState::Outside:
+            state = "outside";
+            break;
+        case Ops::PointState::NearBoundary:
+            state = "near_boundary";
+            break;
+        case Ops::PointState::Unresolved:
+            break;
+    }
+    Object result(Py_BuildValue(
+        "{s:s,s:d,s:d,s:O,s:O}",
+        "state",
+        state,
+        "distance_lower_bound",
+        query.DistanceLowerBound,
+        "distance_tolerance",
+        tolerance,
+        "has_boundary_witness",
+        query.HasBoundaryWitness ? Py_True : Py_False,
+        "solid_validated",
+        Py_False
+    ));
+    if (!result) {
+        return nullptr;
+    }
+    if (query.HasBoundaryWitness) {
+        if (
+            !set(result.get(), "witness_first", xyz(query.WitnessFirst.XYZ()))
+            || !set(result.get(), "witness_last", xyz(query.WitnessLast.XYZ()))
+            || !set(
+                result.get(),
+                "witness_distance_upper_bound",
+                PyFloat_FromDouble(query.WitnessDistanceUpperBound)
+            )
+            || !set(result.get(), "witness_bracket_width", PyFloat_FromDouble(query.WitnessBracketWidth))
+        ) {
+            return nullptr;
+        }
+    }
+    return result.release();
+}
+
 PyMethodDef methods[] = {
+    {"classify_mixed",
+     checked<classifyMixed>,
+     METH_VARARGS,
+     "classify_mixed(boundary_handle, point, distance_tolerance=.1) -> conservative region "
+     "classification"},
     {"mixed_box",
      checked<mixedBox>,
      METH_VARARGS,

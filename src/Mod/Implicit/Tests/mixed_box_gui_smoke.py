@@ -18,9 +18,12 @@ def main():
     caps, seams = view._coordinates, view._seam_coordinates
     assert caps.point.getNum() > 0 and seams.point.getNum() > 0
     old = obj.Proxy.native_boundary()["implicit_face"]
+    old_region = obj.Proxy.native_boundary()["boundary_handle"]
+    assert obj.Proxy.classify((0, 0, 2))["state"] == "inside"
     obj.Operation = "BoxMinusField"
     doc.recompute()
     assert obj.isValid() and obj.PlanarCapCount == 1
+    assert obj.Proxy.classify((0, 0, 2))["state"] == "outside"
     assert view._coordinates is caps and view._seam_coordinates is seams
     assert caps.point.getNum() > 0 and seams.point.getNum() > 0
     with tempfile.TemporaryDirectory(prefix="implicit-mixed-gui-") as directory:
@@ -54,9 +57,13 @@ def main():
     other = ImplicitMixed.demo(open_contours=True)
     assert other.isValid() and other.BoxEdgeRootCount > 4
     assert other.SeamGeometricBound <= .1
+    query = other.Proxy.classify((0, 0, 0))
+    assert query["state"] == "near_boundary" and query["has_boundary_witness"]
+    assert query["witness_bracket_width"] <= .1 / 256
     App.closeDocument(other.Document.Name)
     App.closeDocument(doc.Name)
     assert native.value(old, (1, 1, 1)) > -1
+    assert native.classify_mixed(old_region, (0, 0, 2))["state"] == "inside"
     print("native implicit mixed box GUI smoke test passed", flush=True)
     Gui.getMainWindow().close()
 
