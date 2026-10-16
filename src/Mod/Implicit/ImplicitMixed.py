@@ -242,6 +242,7 @@ class MixedBoundaryView(NativeBoundaryView):
     def attach(self, view):
         from pivy import coin
         self._view = view
+        self._task = None
         self._native_geometry = None
         self._cap_nodes, self._seam_nodes = [], []
         super().attach(view)
@@ -259,6 +260,27 @@ class MixedBoundaryView(NativeBoundaryView):
         self._seam_root = separator
         self._root.addChild(separator)
         self.updateData(view.Object, "NativeRevision")
+
+    def doubleClicked(self, view):
+        import FreeCADGui as Gui
+        if Gui.Control.activeDialog() or App.getActiveTransaction():
+            return False
+        return Gui.getDocument(view.Object.Document.Name).setEdit(view.Object.Name)
+
+    def setEdit(self, view, mode):
+        import FreeCADGui as Gui
+        if mode != 0 or self._task is not None or Gui.Control.activeDialog():
+            return False
+        self._task = MixedBoundaryTaskPanel(view.Object)
+        Gui.Control.showDialog(self._task, Gui.getDocument(view.Object.Document.Name))
+        return True
+
+    def unsetEdit(self, view, _mode):
+        import FreeCADGui as Gui
+        task, self._task = self._task, None
+        if task is not None and not task.closed:
+            task.finish(False, reset_edit=False)
+        Gui.Control.closeDialog(Gui.getDocument(view.Object.Document.Name))
 
     def updateData(self, obj, prop):
         super().updateData(obj, prop)
@@ -351,6 +373,132 @@ class MixedBoundaryView(NativeBoundaryView):
             return False
         for index in range(start, found.getLength()):
             path.append(found.getNode(index))
+        return True
+
+
+class MixedBoundaryTaskPanel:
+    """Transactional editor; meshes remain transient and fields authoritative."""
+
+    def __init__(self, obj):
+        from PySide import QtCore, QtWidgets
+        self.obj = obj
+        self.document_name = obj.Document.Name
+        self.transaction = 0
+        self.closed = False
+        self.form = QtWidgets.QWidget()
+        self.form.setObjectName("ImplicitMixedBoundaryEditor")
+        self.form.setWindowTitle("Edit native mixed boundary")
+        layout = QtWidgets.QFormLayout(self.form)
+        for label, source in (("Field", obj.Field), ("Box", obj.Box)):
+            text = (source.Label + " (" + source.Name + ")") if source else "Missing input"
+            widget = QtWidgets.QLabel(text)
+            widget.setTextFormat(QtCore.Qt.PlainText)
+            layout.addRow(label, widget)
+        self.operation = QtWidgets.QComboBox()
+        self.operation.addItems(["Common", "BoxMinusField"])
+        self.operation.setCurrentText(str(obj.Operation))
+        self.tolerance = QtWidgets.QDoubleSpinBox()
+        self.tolerance.setDecimals(6)
+        self.tolerance.setRange(.000001, 1000000)
+        self.tolerance.setSuffix(" mm")
+        self.tolerance.setValue(obj.GeometricTolerance.Value)
+        self.cells = QtWidgets.QComboBox()
+        budgets = [str(1 << power) for power in range(2, 10)]
+        self.cells.addItems(budgets)
+        if str(obj.MaximumCells) not in budgets:
+            self.cells.addItem(str(obj.MaximumCells))
+        self.cells.setCurrentText(str(obj.MaximumCells))
+        self.cells.setToolTip("Power-of-two tracing budget, 4 to 512 cells per axis")
+        layout.addRow("Operation", self.operation)
+        layout.addRow("Seam tolerance", self.tolerance)
+        layout.addRow("Maximum tracing cells", self.cells)
+        note = QtWidgets.QLabel("Apply previews changes. Cancel restores the previous state. "
+            "Tolerance controls seams only; this is NOT a validated solid or a full-surface mesh.")
+        note.setWordWrap(True)
+        layout.addRow(note)
+        self.status = QtWidgets.QLabel(obj.BackendStatus)
+        self.status.setTextFormat(QtCore.Qt.PlainText)
+        self.status.setWordWrap(True)
+        layout.addRow(self.status)
+
+    def getStandardButtons(self):
+        from PySide import QtWidgets
+        buttons = QtWidgets.QDialogButtonBox
+        return buttons.Ok | buttons.Cancel | buttons.Apply
+
+    def isAllowedAlterDocument(self):
+        return False
+
+    def isAllowedAlterView(self):
+        return True
+
+    def isAllowedAlterSelection(self):
+        return True
+
+    def apply(self):
+        if self.closed:
+            return False
+        try:
+            doc = App.getDocument(self.document_name)
+            if doc is None or self.obj.Document != doc:
+                raise RuntimeError("The edited document is no longer available")
+            cells = int(self.cells.currentText())
+            if cells < 4 or cells > 512 or cells & (cells - 1):
+                raise ValueError("Tracing budget must be a power of two from 4 to 512")
+            active = App.getActiveTransaction()
+            if self.transaction:
+                if not active or active[1] != self.transaction:
+                    raise RuntimeError("Edit transaction changed; cancel and reopen the editor")
+            elif active:
+                raise RuntimeError("Finish the existing transaction before applying native edits")
+            else:
+                self.transaction = App.setActiveTransaction("Edit native mixed boundary", True)
+            self.obj.Operation = self.operation.currentText()
+            self.obj.GeometricTolerance = self.tolerance.value()
+            self.obj.MaximumCells = cells
+            # Catch numerical preview errors here so the task stays usable.
+            # execute clears geometry/display on failure. A successful normal
+            # recompute reuses the published snapshot and updates dependencies.
+            self.obj.Proxy.execute(self.obj)
+            doc.recompute()
+            if not self.obj.isValid() or self.obj.Geometry is None:
+                raise RuntimeError(self.obj.BackendStatus)
+            self.status.setText(self.obj.BackendStatus)
+            return True
+        except Exception as error:
+            self.status.setText("Preview failed: " + str(error))
+            return False
+
+    def clicked(self, button):
+        from PySide import QtWidgets
+        if button == QtWidgets.QDialogButtonBox.Apply:
+            self.apply()
+
+    def accept(self):
+        if not self.apply():
+            return False
+        return self.finish(True)
+
+    def reject(self):
+        return self.finish(False)
+
+    def finish(self, commit, reset_edit=True):
+        if self.closed:
+            return True
+        active = App.getActiveTransaction()
+        owned = self.transaction and active and active[1] == self.transaction
+        if active and not owned:
+            self.status.setText("Finish the existing transaction before closing native edits")
+            return False
+        self.closed = True
+        if owned:
+            App.closeActiveTransaction(not commit, self.transaction)
+        doc = App.getDocument(self.document_name)
+        if doc is not None and owned and not commit:
+            doc.recompute()
+        if reset_edit and doc is not None:
+            import FreeCADGui as Gui
+            Gui.getDocument(self.document_name).resetEdit()
         return True
 
 
