@@ -12,6 +12,10 @@
 #include <BRepTools.hxx>
 #include <Geom_ImplicitSphere.hxx>
 #include <Geom_ImplicitGyroid.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <TopExp.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <Standard_DomainError.hxx>
 #include <Standard_NotImplemented.hxx>
 #include <Standard_Version.hxx>
@@ -531,22 +535,29 @@ PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
             }
         }
     }
-    for (const auto& section : boundary.Sections) {
-        for (const auto& curve : section.Curves) {
-            Object points(PyList_New(curve.Points.size()));
-            if (!points) {
+    // Subelement indices follow the stored implicit wire graph, both before
+    // and after I/O. Tracing section order is not a persistent seam identity.
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    TopExp::MapShapes(boundary.Faces.back(), TopAbs_EDGE, edges);
+    for (const auto& edge : edges) {
+        TopLoc_Location location;
+        double first, last;
+        const auto curve = occ::down_cast<Geom_BSplineCurve>(
+            BRep_Tool::Curve(TopoDS::Edge(edge), location, first, last)
+        );
+        Object points(PyList_New(curve->NbPoles()));
+        if (!points) {
+            return nullptr;
+        }
+        for (int i = 0; i < curve->NbPoles(); ++i) {
+            auto* p = xyz(curve->Pole(i + 1).Transformed(location.Transformation()).XYZ());
+            if (!p) {
                 return nullptr;
             }
-            for (size_t i = 0; i < curve.Points.size(); ++i) {
-                auto* p = xyz(curve.Points[i].XYZ());
-                if (!p) {
-                    return nullptr;
-                }
-                PyList_SET_ITEM(points.get(), i, p);
-            }
-            if (PyList_Append(sections.get(), points.get()) < 0) {
-                return nullptr;
-            }
+            PyList_SET_ITEM(points.get(), i, p);
+        }
+        if (PyList_Append(sections.get(), points.get()) < 0) {
+            return nullptr;
         }
     }
     auto owned = std::make_unique<Ops::Boundary>(boundary);

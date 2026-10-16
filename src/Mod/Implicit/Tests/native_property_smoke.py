@@ -9,6 +9,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import FreeCAD as App
 import Part
+import Implicit
 import ImplicitMixed
 import ImplicitOCCT as native
 
@@ -23,6 +24,34 @@ def main():
     assert obj.isDerivedFrom("App::GeoFeature") and "Shape" not in obj.PropertiesList
     assert native.classify_mixed(obj.getPropertyOfGeometry(), (0, 0, 2))["state"] == "inside"
     old = obj.Geometry
+    geometry = Implicit.nativeGeometry(obj)
+    assert geometry.getElementTypes() == ["NativeFace", "Cap", "Seam"]
+    assert geometry.countSubElements("NativeFace") == 1
+    assert geometry.countSubElements("Cap") == obj.PlanarCapCount
+    assert geometry.countSubElements("Seam") == obj.SeamCount
+    original_seams = native.inspect_mixed(obj.Geometry)["seams"]
+    for index, expected in enumerate(original_seams, 1):
+        points, lines = geometry.getLinesFromSubElement("Seam", index)
+        assert [tuple(p) for p in points] == expected
+        assert lines == [(i, i + 1) for i in range(len(points) - 1)]
+    for index in range(1, obj.PlanarCapCount + 1):
+        points, lines = geometry.getLinesFromSubElement("Cap", index)
+        assert points and lines
+    for kind, index in (("Cap", 0), ("Cap", obj.PlanarCapCount + 1), ("Face", 1)):
+        try:
+            geometry.getLinesFromSubElement(kind, index)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("unknown native subelement accepted")
+    try:
+        geometry.getFacesFromSubElement("NativeFace", 1)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("unimplemented native surface mesh returned silently")
+    roundtrip = native.loads_mixed(native.dumps_mixed(obj.Geometry))
+    assert roundtrip["seams"] == original_seams
     obj.Operation = "BoxMinusField"
     doc.recompute()
     cut = obj.Geometry
@@ -175,7 +204,27 @@ def main():
         assert legacy.MixedSchema == 2 and legacy.Geometry is not None
         assert legacy.getTypeIdOfProperty("Geometry") == "Implicit::PropertyNativeGeometry"
     App.closeDocument(doc.Name)
+    assert geometry.countSubElements("Cap") > 0
+    assert geometry.getLinesFromSubElement("Seam", 1)[0]
     assert native.classify_mixed(old, (0, 0, 2))["state"] == "inside"
+    # The multi-face, open-contour fixture exposes the distinction between
+    # tracing order and stored wire-edge order. Every SeamN must survive I/O.
+    crossing = ImplicitMixed.demo(open_contours=True)
+    crossing_doc = crossing.Document
+    before = Implicit.nativeGeometry(crossing)
+    assert before.countSubElements("Seam") > 4
+    preview = native.inspect_mixed(crossing.Geometry)["seams"]
+    restored_owner = crossing_doc.addObject("Implicit::NativeFeaturePython", "RestoredSnapshot")
+    restored_owner.Geometry = native.dumps_mixed(crossing.Geometry)
+    after = Implicit.nativeGeometry(restored_owner)
+    assert native.inspect_mixed(restored_owner.Geometry)["seams"] == preview
+    for kind in ("NativeFace", "Cap", "Seam"):
+        assert before.countSubElements(kind) == after.countSubElements(kind)
+        for index in range(1, before.countSubElements(kind) + 1):
+            a = before.getLinesFromSubElement(kind, index)
+            b = after.getLinesFromSubElement(kind, index)
+            assert a == b, (kind, index)
+    App.closeDocument(crossing_doc.Name)
     print("native implicit geometry property smoke test passed", flush=True)
 
 

@@ -13,6 +13,7 @@
 #include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
@@ -23,6 +24,52 @@
 namespace
 {
 constexpr const char* capsuleName = "ImplicitOCCT.HybridBoundary.v1";
+class NativeSegment: public Data::Segment
+{
+public:
+    Implicit::NativeBoundaryPtr owner;
+    TopoDS_Shape shape;
+    std::string name;
+    std::string getName() const override
+    {
+        return name;
+    }
+};
+void boundaryLines(
+    const TopoDS_Shape& shape,
+    std::vector<Base::Vector3d>& points,
+    std::vector<Data::ComplexGeoData::Line>& lines
+)
+{
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+    for (const auto& edge : edges) {
+        TopLoc_Location location;
+        double first, last;
+        const auto curve = occ::down_cast<Geom_BSplineCurve>(
+            BRep_Tool::Curve(TopoDS::Edge(edge), location, first, last)
+        );
+        if (curve.IsNull() || curve->Degree() != 1) {
+            throw Base::NotImplementedError("Unsupported native boundary curve");
+        }
+        const auto base = static_cast<uint32_t>(points.size());
+        for (int i = 1; i <= curve->NbPoles(); ++i) {
+            const auto p = curve->Pole(i).Transformed(location.Transformation());
+            points.emplace_back(p.X(), p.Y(), p.Z());
+            if (i > 1) {
+                lines.push_back({base + uint32_t(i - 2), base + uint32_t(i - 1)});
+            }
+        }
+    }
+}
+const NativeSegment& checkedSegment(const Data::Segment* value, const Implicit::NativeBoundaryPtr& owner)
+{
+    const auto* segment = dynamic_cast<const NativeSegment*>(value);
+    if (!segment || segment->owner != owner) {
+        throw Base::ValueError("Missing or foreign native geometry subelement");
+    }
+    return *segment;
+}
 void destroyBoundary(PyObject* capsule)
 {
     if (PyCapsule_IsValid(capsule, capsuleName)) {
@@ -85,9 +132,56 @@ unsigned long NativeGeometry::countSubElements(const char* type) const
     }
     return 0;
 }
-Data::Segment* NativeGeometry::getSubElement(const char*, unsigned long) const
+Data::Segment* NativeGeometry::getSubElement(const char* type, unsigned long index) const
 {
-    throw Base::NotImplementedError("Native mixed subelement selection is not yet implemented");
+    // One-based names, consistently with conventional FreeCAD Face1/Edge1.
+    if (index == 0 || index > countSubElements(type)) {
+        throw Base::ValueError("Unknown native geometry subelement");
+    }
+    auto result = std::make_unique<NativeSegment>();
+    result->owner = boundary;
+    result->name = std::string(type) + std::to_string(index);
+    if (std::strcmp(type, "NativeFace") == 0) {
+        result->shape = boundary->Faces.back();
+    }
+    else if (std::strcmp(type, "Cap") == 0) {
+        result->shape = boundary->Faces.at(index - 1);
+    }
+    else {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+        TopExp::MapShapes(boundary->Faces.back(), TopAbs_EDGE, edges);
+        result->shape = edges.FindKey(int(index));
+    }
+    return result.release();
+}
+void NativeGeometry::getLinesFromSubElement(
+    const Data::Segment* segment,
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines
+) const
+{
+    boundaryLines(checkedSegment(segment, boundary).shape, points, lines);
+}
+bool NativeGeometry::getFirstVertexFromSubElement(const Data::Segment* segment, Base::Vector3d& point) const
+{
+    const auto& shape = checkedSegment(segment, boundary).shape;
+    TopExp_Explorer vertices(shape, TopAbs_VERTEX);
+    if (!vertices.More()) {
+        return false;
+    }
+    const auto p = BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current()));
+    point = Base::Vector3d(p.X(), p.Y(), p.Z());
+    return true;
+}
+void NativeGeometry::getFacesFromSubElement(
+    const Data::Segment* segment,
+    std::vector<Base::Vector3d>&,
+    std::vector<Base::Vector3d>&,
+    std::vector<Facet>&
+) const
+{
+    checkedSegment(segment, boundary);
+    throw Base::NotImplementedError("Native subelement surface meshing is not implemented");
 }
 void NativeGeometry::setTransform(const Base::Matrix4D& matrix)
 {
@@ -137,26 +231,7 @@ void NativeGeometry::getLines(
     if (!boundary) {
         return;
     }
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
-    TopExp::MapShapes(boundary->Shape, TopAbs_EDGE, edges);
-    for (const auto& edge : edges) {
-        TopLoc_Location location;
-        double first, last;
-        const auto curve = occ::down_cast<Geom_BSplineCurve>(
-            BRep_Tool::Curve(TopoDS::Edge(edge), location, first, last)
-        );
-        if (curve.IsNull()) {
-            throw Base::NotImplementedError("Unsupported native boundary curve");
-        }
-        const auto base = static_cast<uint32_t>(points.size());
-        for (int i = 1; i <= curve->NbPoles(); ++i) {
-            const auto p = curve->Pole(i).Transformed(location.Transformation());
-            points.emplace_back(p.X(), p.Y(), p.Z());
-            if (i > 1) {
-                lines.push_back({base + uint32_t(i - 2), base + uint32_t(i - 1)});
-            }
-        }
-    }
+    boundaryLines(boundary->Shape, points, lines);
 }
 void NativeGeometry::Save(Base::Writer&) const
 {

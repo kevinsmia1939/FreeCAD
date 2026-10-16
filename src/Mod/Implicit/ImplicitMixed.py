@@ -241,7 +241,12 @@ from ImplicitNative import NativeBoundaryView
 class MixedBoundaryView(NativeBoundaryView):
     def attach(self, view):
         from pivy import coin
+        self._view = view
+        self._cap_nodes, self._seam_nodes = [], []
         super().attach(view)
+        # Keep aggregate buffers for diagnostics, but render individual native
+        # subelements so a cap pick/highlight never denotes one display triangle.
+        self._root.removeChild(self._faces)
         self._seam_coordinates = coin.SoCoordinate3()
         self._seam_lines = coin.SoIndexedLineSet()
         color = coin.SoBaseColor()
@@ -249,6 +254,8 @@ class MixedBoundaryView(NativeBoundaryView):
         separator = coin.SoSeparator()
         for node in (color, self._seam_coordinates, self._seam_lines):
             separator.addChild(node)
+        separator.removeChild(self._seam_lines)
+        self._seam_root = separator
         self._root.addChild(separator)
         self.updateData(view.Object, "NativeRevision")
 
@@ -268,6 +275,78 @@ class MixedBoundaryView(NativeBoundaryView):
         if vertices:
             self._seam_coordinates.point.setValues(0, len(vertices), vertices)
             self._seam_lines.coordIndex.setValues(0, len(indices), indices)
+        from pivy import coin
+        # Names are snapshot-local indices, not a history mapping across edits.
+        # Discard current selections before a new snapshot can reuse an index.
+        import FreeCADGui as Gui
+        Gui.Selection.removeSelection(obj)
+        caps = getattr(obj.Proxy, "_mesh", None)
+        cap_data = caps["faces"] if caps else []
+        seam_data = data["curves"] if data else []
+        for nodes, root, count, kind in (
+                (self._cap_nodes, self._root, len(cap_data), coin.SoIndexedFaceSet),
+                (self._seam_nodes, self._seam_root, len(seam_data), coin.SoIndexedLineSet)):
+            while len(nodes) > count:
+                root.removeChild(nodes.pop())
+            while len(nodes) < count:
+                node = kind()
+                root.addChild(node)
+                nodes.append(node)
+        offset = 0
+        for node, cap in zip(self._cap_nodes, cap_data):
+            indices = [i + offset if i >= 0 else -1
+                       for tri in cap["triangles"] for i in (*tri, -1)]
+            node.coordIndex.setNum(0)
+            node.coordIndex.setValues(0, len(indices), indices)
+            offset += len(cap["vertices"])
+        offset = 0
+        for node, curve in zip(self._seam_nodes, seam_data):
+            count = len(curve["points"])
+            indices = list(range(offset, offset + count)) + [-1]
+            node.coordIndex.setNum(0)
+            node.coordIndex.setValues(0, len(indices), indices)
+            offset += count
+
+    def getElementPicked(self, picked):
+        tail = picked.getPath().getTail()
+        for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
+            for index, node in enumerate(nodes, 1):
+                if tail == node:
+                    return prefix + str(index)
+        return None
+
+    def getDetailPath(self, name, path, append):
+        from pivy import coin
+        target = None
+        for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
+            if name.startswith(prefix):
+                suffix = name[len(prefix):]
+                if (0 < len(suffix) <= 10 and suffix.isascii() and suffix.isdecimal()
+                        and suffix == str(int(suffix))):
+                    index = int(suffix) - 1
+                    if 0 <= index < len(nodes):
+                        target = nodes[index]
+        if target is None:
+            return False
+        search = coin.SoSearchAction()
+        search.setNode(target)
+        search.apply(self._view.RootNode)
+        found = search.getPath()
+        if found is None:
+            return False
+        # Append the actual shape path, not a face/line detail referring to a
+        # triangle or segment of the disposable display mesh.
+        start = 0
+        if path.getLength():
+            start = found.findNode(path.getTail())
+            if start < 0:
+                return False
+            start += 1
+        elif not append:
+            return False
+        for index in range(start, found.getLength()):
+            path.append(found.getNode(index))
+        return True
 
 
 def create(field, box, operation="Common"):

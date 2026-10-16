@@ -12,6 +12,7 @@
 #include "SurfaceMesh.h"
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
 # include "NativeGeometry.h"
+# include <App/ComplexGeoDataPy.h>
 #endif
 
 namespace Implicit
@@ -78,6 +79,13 @@ public:
     Module()
         : Py::ExtensionModule<Module>("Implicit")
     {
+#ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+        add_varargs_method(
+            "nativeGeometry",
+            &Module::nativeGeometry,
+            "nativeGeometry(feature) -> owned native ComplexGeoData snapshot; local coordinates"
+        );
+#endif
         add_varargs_method(
             "evaluate",
             &Module::evaluate,
@@ -174,6 +182,25 @@ public:
     }
 
 private:
+#ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+    Py::Object nativeGeometry(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "O!", &App::DocumentObjectPy::Type, &object)) {
+            throw Py::Exception();
+        }
+        auto* owner = static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
+        auto* property = dynamic_cast<PropertyNativeGeometry*>(owner->getPropertyByName("Geometry"));
+        if (!property) {
+            throw Py::TypeError("Expected a feature with native mixed geometry");
+        }
+        auto snapshot = std::make_unique<NativeGeometry>();
+        snapshot->boundary = static_cast<const NativeGeometry*>(property->getComplexData())->boundary;
+        auto* wrapper = new Data::ComplexGeoDataPy(snapshot.get());
+        snapshot.release();  // ComplexGeoDataPy owns the reference-counted snapshot.
+        return Py::Object(wrapper, true);
+    }
+#endif
     Py::Object isCancelled(const Py::Tuple& args)
     {
         if (args.size() != 1) {
