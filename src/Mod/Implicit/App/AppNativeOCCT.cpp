@@ -8,6 +8,7 @@
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
+#include <BRepMesh_ImplicitBoundary.hxx>
 #include <BRep_TImplicitFace.hxx>
 #include <BRepTools.hxx>
 #include <Geom_ImplicitSphere.hxx>
@@ -711,7 +712,85 @@ PyObject* classifyMixed(PyObject* args)
     return result.release();
 }
 
+PyObject* prepareMixedMesh(PyObject* args)
+{
+    PyObject* object;
+    double deflection = .1;
+    int maximumNodes = 200000, maximumTriangles = 400000;
+    if (!PyArg_ParseTuple(args, "O|dii", &object, &deflection, &maximumNodes, &maximumTriangles)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto mesh
+        = BRepMesh_ImplicitBoundary::Prepare(*boundary, deflection, maximumNodes, maximumTriangles);
+    Object result(PyDict_New()), vertices(PyList_New(mesh.Nodes.size()));
+    Object triangles(PyList_New(mesh.CapTriangles.size()));
+    if (!result || !vertices || !triangles) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < mesh.Nodes.size(); ++i) {
+        auto* vertex = xyz(mesh.Nodes[i].XYZ());
+        if (!vertex) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(vertices.get(), i, vertex);
+    }
+    for (size_t i = 0; i < mesh.CapTriangles.size(); ++i) {
+        const auto& t = mesh.CapTriangles[i];
+        auto* triangle = Py_BuildValue("(iiii)", t.Nodes[0], t.Nodes[1], t.Nodes[2], t.Cap);
+        if (!triangle) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(triangles.get(), i, triangle);
+    }
+    const auto indices = [](const std::vector<std::vector<int>>& paths) -> PyObject* {
+        Object result(PyList_New(paths.size()));
+        if (!result) {
+            return nullptr;
+        }
+        for (size_t i = 0; i < paths.size(); ++i) {
+            Object path(PyList_New(paths[i].size()));
+            if (!path) {
+                return nullptr;
+            }
+            for (size_t j = 0; j < paths[i].size(); ++j) {
+                auto* index = PyLong_FromLong(paths[i][j]);
+                if (!index) {
+                    return nullptr;
+                }
+                PyList_SET_ITEM(path.get(), j, index);
+            }
+            PyList_SET_ITEM(result.get(), i, path.release());
+        }
+        return result.release();
+    };
+    if (!set(result.get(), "vertices", vertices.release())
+        || !set(result.get(), "cap_triangles", triangles.release())
+        || !set(result.get(), "seams", indices(mesh.Seams))
+        || !set(result.get(), "wires", indices(mesh.Wires))
+        || !set(result.get(), "seam_geometric_bound", PyFloat_FromDouble(mesh.SeamGeometricBound))
+        || !set(result.get(), "seam_bound_verified", PyBool_FromLong(mesh.SeamBoundVerified))
+        || !set(result.get(), "native_surface_meshed", PyBool_FromLong(mesh.NativeSurfaceMeshed))
+        || !set(result.get(), "solid_validated", PyBool_FromLong(mesh.SolidValidated))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyMethodDef methods[] = {
+    {"prepare_mixed_mesh",
+     checked<prepareMixedMesh>,
+     METH_VARARGS,
+     "prepare_mixed_mesh(boundary_handle, cap_deflection=.1, maximum_nodes=200000, "
+     "maximum_triangles=400000) -> cap triangles/shared native seam constraints; "
+     "NO implicit surface mesh or validated solid. Indices are zero-based; cap triangles "
+     "are (a,b,c,cap_index), wires repeat the closing node."},
     {"inspect_mixed",
      checked<inspectMixed>,
      METH_VARARGS,
