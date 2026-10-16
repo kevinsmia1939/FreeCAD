@@ -1002,6 +1002,134 @@ PyObject* checkBoxRegularity(PyObject* args)
     return result.release();
 }
 
+template<bool Mixed>
+PyObject* checkBoxTopology(PyObject* args)
+{
+    PyObject* object;
+    int resolution = 32, depth = 16;
+    unsigned long long cells = 4000000;
+    if (!PyArg_ParseTuple(args, "O|iiK", &object, &resolution, &depth, &cells)) {
+        return nullptr;
+    }
+    if (!cells || cells > 10000000) {
+        throw Standard_DomainError("Invalid box topology work budget");
+    }
+    const TopoDS_Face* face;
+    if constexpr (Mixed) {
+        if (!PyCapsule_IsValid(object, boundaryName)) {
+            PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+            return nullptr;
+        }
+        face = &static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+                    PyCapsule_GetPointer(object, boundaryName)
+        )
+                    ->Faces.back();
+    }
+    else {
+        face = getFace(object);
+        if (!face) {
+            return nullptr;
+        }
+    }
+    const auto report = BRepClass3d_ImplicitBox::CheckTopology(*face, resolution, depth, size_t(cells));
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:O,s:O,s:s,s:d,s:d,s:i,s:i}",
+        "whole_box_homotopy_resolved",
+        report.HomotopyResolved ? Py_True : Py_False,
+        "reference_manifold",
+        report.ReferenceManifold ? Py_True : Py_False,
+        "stored_trim_correspondence_validated",
+        Py_False,
+        "topology_validated",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "geometry_accuracy_verified",
+        Py_False,
+        "reason",
+        report.Reason.c_str(),
+        "minimum_homotopy_derivative",
+        report.MinimumHomotopyDerivative,
+        "maximum_simplex_diameter",
+        report.MaximumSimplexDiameter,
+        "resolution",
+        report.Resolution,
+        "unresolved_dimension",
+        report.UnresolvedDimension
+    ));
+    Object vertices(PyList_New(report.Nodes.size())), triangles(PyList_New(report.Triangles.size()));
+    Object loops(PyList_New(report.BoundaryLoops.size())),
+        euler(PyList_New(report.ComponentEuler.size()));
+    Object strata(PyList_New(4));
+    if (!result || !vertices || !triangles || !loops || !euler || !strata) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < report.Nodes.size(); ++i) {
+        auto* point = xyz(report.Nodes[i].XYZ());
+        if (!point) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(vertices.get(), i, point);
+    }
+    for (size_t i = 0; i < report.Triangles.size(); ++i) {
+        const auto& t = report.Triangles[i];
+        auto* triangle = Py_BuildValue("(iii)", t[0], t[1], t[2]);
+        if (!triangle) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(triangles.get(), i, triangle);
+    }
+    for (size_t i = 0; i < report.BoundaryLoops.size(); ++i) {
+        const auto& path = report.BoundaryLoops[i];
+        Object loop(PyList_New(path.size()));
+        if (!loop) {
+            return nullptr;
+        }
+        for (size_t j = 0; j < path.size(); ++j) {
+            auto* index = PyLong_FromLong(path[j]);
+            if (!index) {
+                return nullptr;
+            }
+            PyList_SET_ITEM(loop.get(), j, index);
+        }
+        PyList_SET_ITEM(loops.get(), i, loop.release());
+    }
+    for (size_t i = 0; i < report.ComponentEuler.size(); ++i) {
+        auto* value = PyLong_FromLong(report.ComponentEuler[i]);
+        if (!value) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(euler.get(), i, value);
+    }
+    for (size_t i = 0; i < 4; ++i) {
+        auto* entry = Py_BuildValue(
+            "{s:i,s:K,s:K,s:K}",
+            "dimension",
+            int(i),
+            "visited",
+            static_cast<unsigned long long>(report.Visited[i]),
+            "excluded",
+            static_cast<unsigned long long>(report.Excluded[i]),
+            "transverse",
+            static_cast<unsigned long long>(report.Transverse[i])
+        );
+        if (!entry) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(strata.get(), i, entry);
+    }
+    if (!set(result.get(), "reference_vertices", vertices.release())
+        || !set(result.get(), "reference_triangles", triangles.release())
+        || !set(result.get(), "reference_boundary_loops", loops.release())
+        || !set(result.get(), "reference_component_euler", euler.release())
+        || !set(result.get(), "strata", strata.release())
+        || !set(result.get(), "unresolved_minimum", xyz(report.UnresolvedMinimum.XYZ()))
+        || !set(result.get(), "unresolved_maximum", xyz(report.UnresolvedMaximum.XYZ()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyObject* checkMixedCorrespondence(PyObject* args)
 {
     PyObject* object;
@@ -1060,6 +1188,19 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"check_box_topology",
+     checked<checkBoxTopology<false>>,
+     METH_VARARGS,
+     "check_box_topology(native_gyroid_face, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000) "
+     "-> whole BOX field-to-nodal-linear homotopy check and transient topology witness. "
+     "Not stored-trim/preview equivalence, geometric accuracy or native-solid validation."},
+    {"check_mixed_topology",
+     checked<checkBoxTopology<true>>,
+     METH_VARARGS,
+     "check_mixed_topology(boundary_handle, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000) "
+     "-> checks its mathematical BOX zero set, NOT stored trim/cap or preview correspondence."},
     {"check_mixed_correspondence",
      checked<checkMixedCorrespondence>,
      METH_VARARGS,
