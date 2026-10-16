@@ -242,6 +242,7 @@ class MixedBoundaryView(NativeBoundaryView):
     def attach(self, view):
         from pivy import coin
         self._view = view
+        self._native_geometry = None
         self._cap_nodes, self._seam_nodes = [], []
         super().attach(view)
         # Keep aggregate buffers for diagnostics, but render individual native
@@ -280,6 +281,7 @@ class MixedBoundaryView(NativeBoundaryView):
         # Discard current selections before a new snapshot can reuse an index.
         import FreeCADGui as Gui
         Gui.Selection.removeSelection(obj)
+        self._native_geometry = Implicit.nativeGeometry(obj) if obj.Geometry is not None else None
         caps = getattr(obj.Proxy, "_mesh", None)
         cap_data = caps["faces"] if caps else []
         seam_data = data["curves"] if data else []
@@ -317,6 +319,9 @@ class MixedBoundaryView(NativeBoundaryView):
 
     def getDetailPath(self, name, path, append):
         from pivy import coin
+        if self._native_geometry is None:
+            return False
+        name = self._native_geometry.getElementName(name)
         target = None
         for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
             if name.startswith(prefix):

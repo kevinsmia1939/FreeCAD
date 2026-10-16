@@ -18,12 +18,15 @@ using NativeBoundaryPtr = std::shared_ptr<const NativeBoundary>;
 class ImplicitExport NativeGeometry: public Data::ComplexGeoData
 {
     TYPESYSTEM_HEADER_WITH_OVERRIDE();
+    friend class PropertyNativeGeometry;
 
 public:
     NativeBoundaryPtr boundary;
+    void setBoundary(NativeBoundaryPtr);
     std::vector<const char*> getElementTypes() const override;
     unsigned long countSubElements(const char*) const override;
     Data::Segment* getSubElement(const char*, unsigned long) const override;
+    Data::Segment* getSubElementByName(const char*) const override;
     void getLinesFromSubElement(
         const Data::Segment*,
         std::vector<Base::Vector3d>&,
@@ -91,6 +94,13 @@ public:
     PropertyNativeGeometry Geometry;
     const App::PropertyComplexGeoData* getPropertyOfGeometry() const override;
     const char* getViewProviderName() const override;
+    App::DocumentObject* getSubObject(
+        const char*,
+        PyObject** = nullptr,
+        Base::Matrix4D* = nullptr,
+        bool = true,
+        int = 0
+    ) const override;
 
 protected:
     void onSettingDocument() override;

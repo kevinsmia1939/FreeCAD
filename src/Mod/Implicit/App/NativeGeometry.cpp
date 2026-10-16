@@ -7,6 +7,7 @@
 #include <App/GeoFeaturePy.h>
 #include <App/FeaturePythonPyImp.h>
 #include <App/Document.h>
+#include <App/ElementNamingUtils.h>
 #include <App/PropertyStandard.h>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
 #include <BRep_TImplicitFace.hxx>
@@ -18,6 +19,7 @@
 #include <NCollection_IndexedMap.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <Python.h>
+#include <QCryptographicHash>
 #include <cstring>
 #include <sstream>
 
@@ -112,6 +114,39 @@ TYPESYSTEM_SOURCE(Implicit::NativeGeometry, Data::ComplexGeoData)
 TYPESYSTEM_SOURCE(Implicit::PropertyNativeGeometry, App::PropertyComplexGeoData)
 PROPERTY_SOURCE(Implicit::NativeFeature, App::GeoFeature)
 
+void NativeGeometry::setBoundary(NativeBoundaryPtr next)
+{
+    // Conservative whole-snapshot identity: unchanged topology survives I/O
+    // and copying; changed topology MUST NOT silently reuse indexed names.
+    auto names = std::make_shared<Data::ElementMap>();
+    if (next) {
+        std::ostringstream output;
+        writeBoundary(*next, output);
+        const auto bytes = output.str();
+        const auto digest = QCryptographicHash::hash(
+                                QByteArray(bytes.data(), qsizetype(bytes.size())),
+                                QCryptographicHash::Sha256
+        )
+                                .toHex();
+        const std::string prefix = "ImplicitV1_" + digest.toStdString() + ":";
+        for (const auto* type : {"NativeFace", "Cap", "Seam"}) {
+            const size_t count = std::strcmp(type, "NativeFace") == 0 ? 1
+                : std::strcmp(type, "Cap") == 0                       ? next->Faces.size() - 1
+                                                                      : next->SeamCount;
+            for (size_t index = 1; index <= count; ++index) {
+                const auto name = prefix + type + std::to_string(index);
+                names->setElementName(
+                    Data::IndexedName(type, int(index)),
+                    Data::MappedName(name.c_str()),
+                    0
+                );
+            }
+        }
+    }
+    boundary = std::move(next);
+    resetElementMap(std::move(names));
+}
+
 std::vector<const char*> NativeGeometry::getElementTypes() const
 {
     return {"NativeFace", "Cap", "Seam"};
@@ -153,6 +188,17 @@ Data::Segment* NativeGeometry::getSubElement(const char* type, unsigned long ind
         result->shape = edges.FindKey(int(index));
     }
     return result.release();
+}
+Data::Segment* NativeGeometry::getSubElementByName(const char* name) const
+{
+    if (!name) {
+        throw Base::ValueError("Missing native subelement name");
+    }
+    const auto mapped = getElementName(name);
+    if (!mapped.index) {
+        throw Base::ValueError("Missing or stale native subelement reference");
+    }
+    return getSubElement(mapped.index.getType(), mapped.index.getIndex());
 }
 void NativeGeometry::getLinesFromSubElement(
     const Data::Segment* segment,
@@ -248,8 +294,11 @@ unsigned int NativeGeometry::getMemSize() const
 }
 void PropertyNativeGeometry::setValue(NativeBoundaryPtr value)
 {
+    NativeGeometry next;
+    next.setBoundary(std::move(value));  // Validate/map before property mutation.
     aboutToSetValue();
-    data.boundary = std::move(value);
+    data.boundary = std::move(next.boundary);
+    data.resetElementMap(next.elementMap());
     hasSetValue();
 }
 const Data::ComplexGeoData* PropertyNativeGeometry::getComplexData() const
@@ -318,7 +367,7 @@ void PropertyNativeGeometry::setPyObject(PyObject* object)
 App::Property* PropertyNativeGeometry::Copy() const
 {
     auto result = new PropertyNativeGeometry;
-    result->data.boundary = data.boundary;  // immutable sharing, never editable kernel aliasing
+    result->data.setBoundary(data.boundary);
     return result;
 }
 void PropertyNativeGeometry::Paste(const App::Property& from)
@@ -402,6 +451,35 @@ const App::PropertyComplexGeoData* NativeFeature::getPropertyOfGeometry() const
 const char* NativeFeature::getViewProviderName() const
 {
     return "Gui::ViewProviderGeometryPython";
+}
+App::DocumentObject* NativeFeature::getSubObject(
+    const char* name,
+    PyObject** pyObject,
+    Base::Matrix4D* matrix,
+    bool transform,
+    int depth
+) const
+{
+    if (!name || !*name || (std::strchr(name, '.') && !Data::isMappedElement(name))) {
+        return App::GeoFeature::getSubObject(name, pyObject, matrix, transform, depth);
+    }
+    const auto* geometry = Geometry.getComplexData();
+    try {
+        std::unique_ptr<Data::Segment> segment(geometry->getSubElementByName(name));
+    }
+    catch (const Base::ValueError&) {
+        return nullptr;
+    }
+    if (matrix && transform) {
+        *matrix *= Placement.getValue().toMatrix();
+    }
+    // Native selection/reference validation does not pretend the subelement
+    // is a Part.Shape. Representation-aware extraction uses nativeGeometry.
+    if (pyObject) {
+        Py_INCREF(Py_None);
+        *pyObject = Py_None;
+    }
+    return const_cast<NativeFeature*>(this);
 }
 void NativeFeature::onSettingDocument()
 {

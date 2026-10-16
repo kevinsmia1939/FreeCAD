@@ -195,7 +195,7 @@ private:
             throw Py::TypeError("Expected a feature with native mixed geometry");
         }
         auto snapshot = std::make_unique<NativeGeometry>();
-        snapshot->boundary = static_cast<const NativeGeometry*>(property->getComplexData())->boundary;
+        snapshot->setBoundary(static_cast<const NativeGeometry*>(property->getComplexData())->boundary);
         auto* wrapper = new Data::ComplexGeoDataPy(snapshot.get());
         snapshot.release();  // ComplexGeoDataPy owns the reference-counted snapshot.
         return Py::Object(wrapper, true);

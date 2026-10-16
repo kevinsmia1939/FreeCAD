@@ -21,6 +21,10 @@ def check_subelements(obj):
             path = coin.SoPath()
             obj.ViewObject.getDetailPath(name, path)
             assert path.getLength() > 0 and path.getTail() == node
+            mapped = ";" + geometry.getElementName(name, 1) + "." + name
+            mapped_path = coin.SoPath()
+            obj.ViewObject.getDetailPath(mapped, mapped_path)
+            assert mapped_path.getLength() > 0 and mapped_path.getTail() == node
             assert geometry.getLinesFromSubElement(prefix, index)[0]
     path = coin.SoPath()
     obj.ViewObject.getDetailPath("Cap999999", path)
@@ -63,6 +67,7 @@ def main():
     caps, seams = view._coordinates, view._seam_coordinates
     assert caps.point.getNum() > 0 and seams.point.getNum() > 0
     retained_geometry = check_subelements(obj)
+    retained_name = ";" + retained_geometry.getElementName("Cap1", 1) + ".Cap1"
     old = obj.Proxy.native_boundary()["implicit_face"]
     old_region = obj.Proxy.native_boundary()["boundary_handle"]
     assert obj.Proxy.classify((0, 0, 2))["state"] == "inside"
@@ -71,6 +76,10 @@ def main():
     assert obj.isValid() and obj.PlanarCapCount == 1
     assert obj.Proxy.classify((0, 0, 2))["state"] == "outside"
     assert not Gui.Selection.getSelectionEx()
+    from pivy import coin
+    stale_path = coin.SoPath()
+    obj.ViewObject.getDetailPath(retained_name, stale_path)
+    assert stale_path.getLength() == 0
     check_subelements(obj)
     assert view._coordinates is caps and view._seam_coordinates is seams
     assert caps.point.getNum() > 0 and seams.point.getNum() > 0
