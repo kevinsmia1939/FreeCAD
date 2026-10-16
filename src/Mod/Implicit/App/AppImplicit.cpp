@@ -2,6 +2,7 @@
 
 #include <App/DocumentObjectPy.h>
 #include <Base/Interpreter.h>
+#include <Base/Exception.h>
 #include <Base/PyObjectBase.h>
 #include <cmath>
 #include <atomic>
@@ -84,6 +85,12 @@ public:
             "nativeGeometry",
             &Module::nativeGeometry,
             "nativeGeometry(feature) -> owned native ComplexGeoData snapshot; local coordinates"
+        );
+        add_varargs_method(
+            "classifyNative",
+            &Module::classifyNative,
+            "classifyNative(wholeNativeGeometry, point, distanceTolerance=.1) -> conservative "
+            "region query in geometry coordinates"
         );
 #endif
         add_varargs_method(
@@ -183,6 +190,66 @@ public:
 
 private:
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+    Py::Object classifyNative(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        Base::Vector3d point;
+        double tolerance = .1;
+        if (!PyArg_ParseTuple(
+                args.ptr(),
+                "O!(ddd)|d",
+                &Data::ComplexGeoDataPy::Type,
+                &object,
+                &point.x,
+                &point.y,
+                &point.z,
+                &tolerance
+            )) {
+            throw Py::Exception();
+        }
+        const auto* geometry = dynamic_cast<const NativeGeometry*>(
+            static_cast<Data::ComplexGeoDataPy*>(object)->getComplexGeoDataPtr()
+        );
+        if (!geometry) {
+            throw Py::TypeError("Expected whole native mixed geometry");
+        }
+        NativeRegionQuery result;
+        try {
+            result = geometry->classifyRegion(point, tolerance);
+        }
+        catch (const Base::NotImplementedError& error) {
+            PyErr_SetString(PyExc_NotImplementedError, error.what());
+            throw Py::Exception();
+        }
+        catch (const Base::ValueError& error) {
+            throw Py::ValueError(error.what());
+        }
+        const auto& query = result.classification;
+        using State = BRepClass3d_ImplicitBox::PointState;
+        const char* state = query.State == State::Inside ? "inside"
+            : query.State == State::Outside              ? "outside"
+            : query.State == State::NearBoundary         ? "near_boundary"
+                                                         : "unresolved";
+        Py::Dict data;
+        data["state"] = Py::String(state);
+        data["distance_lower_bound"] = Py::Float(query.DistanceLowerBound);
+        data["distance_tolerance"] = Py::Float(tolerance);
+        data["placement_error_bound"] = Py::Float(result.placementErrorBound);
+        data["placement_resolved"] = Py::Boolean(result.placementResolved);
+        data["has_boundary_witness"] = Py::Boolean(query.HasBoundaryWitness);
+        data["solid_validated"] = Py::Boolean(false);
+        if (query.HasBoundaryWitness) {
+            data["witness_first"] = vectorToPython(
+                Base::Vector3d(query.WitnessFirst.X(), query.WitnessFirst.Y(), query.WitnessFirst.Z())
+            );
+            data["witness_last"] = vectorToPython(
+                Base::Vector3d(query.WitnessLast.X(), query.WitnessLast.Y(), query.WitnessLast.Z())
+            );
+            data["witness_distance_upper_bound"] = Py::Float(query.WitnessDistanceUpperBound);
+            data["witness_bracket_width"] = Py::Float(query.WitnessBracketWidth);
+        }
+        return data;
+    }
     Py::Object nativeGeometry(const Py::Tuple& args)
     {
         PyObject* object = nullptr;

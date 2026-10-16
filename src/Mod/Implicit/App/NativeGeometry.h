@@ -12,6 +12,12 @@ namespace Implicit
 {
 using NativeBoundary = BRepClass3d_ImplicitBox::Boundary;
 using NativeBoundaryPtr = std::shared_ptr<const NativeBoundary>;
+struct NativeRegionQuery
+{
+    BRepClass3d_ImplicitBox::PointClassification classification;
+    double placementErrorBound = 0;
+    bool placementResolved = true;
+};
 
 // Immutable kernel geometry, not a mesh or a Python recipe. Geometry-property
 // persistence owns I/O; generic surface meshing/transforms remain guarded.
@@ -23,6 +29,7 @@ class ImplicitExport NativeGeometry: public Data::ComplexGeoData
 public:
     NativeBoundaryPtr boundary;
     void setBoundary(NativeBoundaryPtr);
+    virtual NativeRegionQuery classifyRegion(const Base::Vector3d&, double) const;
     std::vector<const char*> getElementTypes() const override;
     unsigned long countSubElements(const char*) const override;
     Data::Segment* getSubElement(const char*, unsigned long) const override;
@@ -93,6 +100,7 @@ class ImplicitExport NativePlacedGeometry: public NativeGeometry
 public:
     NativePlacedGeometry() = default;
     NativePlacedGeometry(const NativeGeometry&, const Base::Matrix4D&);
+    NativeRegionQuery classifyRegion(const Base::Vector3d&, double) const override;
     Base::BoundBox3d getBoundBox() const override;
     void getLines(std::vector<Base::Vector3d>&, std::vector<Line>&, double, uint16_t = 0) const override;
     void getLinesFromSubElement(
@@ -115,6 +123,7 @@ class ImplicitExport NativeElementGeometry: public NativeGeometry
 public:
     NativeElementGeometry() = default;
     NativeElementGeometry(const NativeGeometry&, const char*, const Base::Matrix4D&);
+    NativeRegionQuery classifyRegion(const Base::Vector3d&, double) const override;
     std::vector<const char*> getElementTypes() const override;
     unsigned long countSubElements(const char*) const override;
     Data::Segment* getSubElement(const char*, unsigned long) const override;

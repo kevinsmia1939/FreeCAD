@@ -111,6 +111,10 @@ def main():
     actual = whole_geometry.getLines(.1)[0]
     assert len(actual) == len(expected)
     assert all((a - b).Length < 1e-10 for a, b in zip(actual, expected))
+    placed_point = tuple(instance.LinkPlacement.multVec(App.Vector(0, 0, 2)))
+    classification = Implicit.classifyNative(whole_geometry, placed_point)
+    assert classification["state"] == "inside" and classification["solid_validated"] is False
+    assert classification["placement_error_bound"] < .1
     doc.removeObject(instance.Name)
     retained_name = ";" + retained_geometry.getElementName("Cap1", 1) + ".Cap1"
     old = obj.Proxy.native_boundary()["implicit_face"]

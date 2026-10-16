@@ -24,6 +24,7 @@
 #include <cstring>
 #include <cmath>
 #include <sstream>
+#include <limits>
 
 namespace
 {
@@ -161,6 +162,128 @@ NativePlacedGeometry::NativePlacedGeometry(const NativeGeometry& source, const B
 {
     requireRigid(matrix);
     setBoundary(source.boundary);
+}
+NativeRegionQuery NativeGeometry::classifyRegion(const Base::Vector3d& point, double tolerance) const
+{
+    if (!boundary) {
+        throw Base::ValueError("Cannot classify an empty native geometry snapshot");
+    }
+    if (!std::isfinite(tolerance) || tolerance <= 0 || !std::isfinite(point.x)
+        || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        throw Base::ValueError("Classification requires finite coordinates and positive tolerance");
+    }
+    NativeRegionQuery result;
+    try {
+        result.classification = BRepClass3d_ImplicitBox::Classify(
+            *boundary,
+            gp_Pnt(point.x, point.y, point.z),
+            tolerance
+        );
+    }
+    catch (const Standard_Failure& error) {
+        throw Base::ValueError(error.what());
+    }
+    return result;
+}
+NativeRegionQuery NativeElementGeometry::classifyRegion(const Base::Vector3d&, double) const
+{
+    throw Base::NotImplementedError(
+        "A selected boundary element is not a region; extract the whole native object"
+    );
+}
+NativeRegionQuery NativePlacedGeometry::classifyRegion(const Base::Vector3d& point, double tolerance) const
+{
+    using Ops = BRepClass3d_ImplicitBox;
+    if (!boundary || !std::isfinite(tolerance) || tolerance <= 0 || !std::isfinite(point.x)
+        || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        throw Base::ValueError(
+            "Classification requires native geometry, finite coordinates and positive tolerance"
+        );
+    }
+    auto inverse = placement;
+    inverse.inverse();
+    Base::Vector3d local = point;
+    placePoint(inverse, local);
+    auto returned = local;
+    placePoint(placement, returned);
+    const auto domain = NativeGeometry::getBoundBox();
+    const double extent[3] = {
+        std::max(std::abs(domain.MinX), std::abs(domain.MaxX)),
+        std::max(std::abs(domain.MinY), std::abs(domain.MaxY)),
+        std::max(std::abs(domain.MinZ), std::abs(domain.MaxZ))
+    };
+    // Residual bounds the computed inverse's backward error. The reserve
+    // also covers forward transformation of any witness in the finite domain.
+    long double magnitude = 1, residual = 0;
+    for (int row = 0; row < 3; ++row) {
+        residual += std::abs(static_cast<long double>(returned[row]) - point[row]);
+        magnitude += std::abs(static_cast<long double>(point[row])) + std::abs(placement[row][3]);
+        for (int column = 0; column < 3; ++column) {
+            magnitude += std::abs(static_cast<long double>(placement[row][column]))
+                * (std::abs(static_cast<long double>(local[column])) + extent[column]);
+        }
+    }
+    constexpr double epsilon = std::numeric_limits<double>::epsilon();
+    NativeRegionQuery result;
+    const long double error = residual + 128 * epsilon * magnitude;
+    result.placementErrorBound = error < std::numeric_limits<double>::max()
+        ? std::nextafter(static_cast<double>(error), std::numeric_limits<double>::infinity())
+        : std::numeric_limits<double>::max();
+    // Preserve the kernel's tolerance/256 root-bracket policy after both
+    // endpoint transforms. Reserve 4*256 errors, keeping >= half the query
+    // tolerance for local numerical work instead of requesting tiny brackets.
+    if (error * 2048 >= tolerance) {
+        result.placementResolved = false;
+        return result;
+    }
+    // Gershgorin bound on M^T M, including a floating-point reserve. Even an
+    // accepted near-rigid matrix must not silently assume unit stretch.
+    double deviation = 0;
+    for (int row = 0; row < 3; ++row) {
+        double sum = 512 * epsilon;
+        for (int column = 0; column < 3; ++column) {
+            double gram = 0;
+            for (int axis = 0; axis < 3; ++axis) {
+                gram += placement[axis][row] * placement[axis][column];
+            }
+            sum += std::abs(gram - (row == column ? 1 : 0));
+        }
+        deviation = std::max(deviation, sum);
+    }
+    if (deviation >= .01) {
+        throw Base::NotImplementedError("Native classification requires a numerically rigid placement");
+    }
+    const double minimumStretch = std::sqrt(1 - deviation) - 64 * epsilon;
+    const double maximumStretch = std::sqrt(1 + deviation) + 64 * epsilon;
+    const double allowed = (tolerance - 1024 * result.placementErrorBound) / maximumStretch;
+    auto localResult = NativeGeometry::classifyRegion(local, allowed);
+    auto& query = localResult.classification;
+    query.DistanceLowerBound
+        = std::max(0., minimumStretch * query.DistanceLowerBound - result.placementErrorBound);
+    if ((query.State == Ops::PointState::Inside || query.State == Ops::PointState::Outside)
+        && query.DistanceLowerBound <= tolerance) {
+        query.State = Ops::PointState::Unresolved;
+    }
+    if (query.HasBoundaryWitness) {
+        query.WitnessDistanceUpperBound = maximumStretch * query.WitnessDistanceUpperBound
+            + result.placementErrorBound;
+        query.WitnessBracketWidth = query.WitnessBracketWidth == 0
+            ? 0
+            : maximumStretch * query.WitnessBracketWidth + 2 * result.placementErrorBound;
+        if (query.WitnessDistanceUpperBound > tolerance
+            || query.WitnessBracketWidth > tolerance / 256) {
+            query = {};
+        }
+        else {
+            for (auto* witness : {&query.WitnessFirst, &query.WitnessLast}) {
+                Base::Vector3d coordinates(witness->X(), witness->Y(), witness->Z());
+                placePoint(placement, coordinates);
+                witness->SetCoord(coordinates.x, coordinates.y, coordinates.z);
+            }
+        }
+    }
+    result.classification = query;
+    return result;
 }
 Base::BoundBox3d NativePlacedGeometry::getBoundBox() const
 {
