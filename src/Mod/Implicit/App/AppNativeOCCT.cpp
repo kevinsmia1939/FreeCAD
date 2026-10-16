@@ -1002,7 +1002,70 @@ PyObject* checkBoxRegularity(PyObject* args)
     return result.release();
 }
 
+PyObject* checkMixedCorrespondence(PyObject* args)
+{
+    PyObject* object;
+    int cells = 512;
+    unsigned long long comparisons = 2000000;
+    if (!PyArg_ParseTuple(args, "O|iK", &object, &cells, &comparisons)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!comparisons || comparisons > 10000000) {
+        throw Standard_DomainError("Invalid correspondence comparison budget");
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto report
+        = BRepClass3d_ImplicitBox::CheckCorrespondence(*boundary, cells, size_t(comparisons));
+    return Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:s,s:i,s:i,s:i,s:i,s:K,s:K,s:d,s:d,s:d,s:d,s:d}",
+        "stored_graph_correspondence_resolved",
+        report.Resolved ? Py_True : Py_False,
+        "field_box_regularity_resolved",
+        report.RegularityResolved ? Py_True : Py_False,
+        "topology_validated",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "reason",
+        report.Reason.c_str(),
+        "matched_edges",
+        report.MatchedEdges,
+        "matched_vertices",
+        report.MatchedVertices,
+        "matched_caps",
+        report.MatchedCaps,
+        "matched_wires",
+        report.MatchedWires,
+        "comparisons",
+        static_cast<unsigned long long>(report.Comparisons),
+        "sample_tests",
+        static_cast<unsigned long long>(report.SampleTests),
+        "matching_tolerance",
+        report.MatchingTolerance,
+        "curve_deviation_bound",
+        report.CurveDeviationBound,
+        "reference_seam_bound",
+        report.ReferenceSeamBound,
+        "minimum_tangent_alignment",
+        report.MinimumTangentAlignment,
+        "cap_parameter_deviation_bound",
+        report.CapParameterDeviationBound
+    );
+}
+
 PyMethodDef methods[] = {
+    {"check_mixed_correspondence",
+     checked<checkMixedCorrespondence>,
+     METH_VARARGS,
+     "check_mixed_correspondence(boundary_handle, maximum_cells=512, maximum_comparisons=2000000) "
+     "-> private reference trace and bijective stored curve/vertex/directed wire/cap graph match. "
+     "Not surface isotopy, reach or native-solid validation; source is never replaced."},
     {"check_mixed_regularity",
      checked<checkBoxRegularity<true>>,
      METH_VARARGS,
