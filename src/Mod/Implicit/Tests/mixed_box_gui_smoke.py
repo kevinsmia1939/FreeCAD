@@ -54,6 +54,10 @@ def check_subelements(obj):
     Gui.Selection.addSelection(obj, "Seam1")
     selected = Gui.Selection.getSelectionEx()
     assert selected and set(selected[0].SubElementNames) == {"Cap1", "Seam1"}
+    assert len(selected[0].SubObjects) == 2
+    for element in selected[0].SubObjects:
+        assert element.getElementTypes() == ["Element"]
+        assert element.getLines(.1)[0]
     return geometry
 
 

@@ -85,6 +85,32 @@ private:
     NativeGeometry data;
 };
 
+// Owned, pre-placed subobject result for representation-aware consumers. It
+// exposes one Element1, not an editable Part shape or a complete surface mesh.
+class ImplicitExport NativeElementGeometry: public NativeGeometry
+{
+    TYPESYSTEM_HEADER_WITH_OVERRIDE();
+
+public:
+    NativeElementGeometry() = default;
+    NativeElementGeometry(const NativeGeometry&, const char*, const Base::Matrix4D&);
+    std::vector<const char*> getElementTypes() const override;
+    unsigned long countSubElements(const char*) const override;
+    Data::Segment* getSubElement(const char*, unsigned long) const override;
+    Base::BoundBox3d getBoundBox() const override;
+    void getLines(std::vector<Base::Vector3d>&, std::vector<Line>&, double, uint16_t = 0) const override;
+    void getLinesFromSubElement(
+        const Data::Segment*,
+        std::vector<Base::Vector3d>&,
+        std::vector<Line>&
+    ) const override;
+    bool getFirstVertexFromSubElement(const Data::Segment*, Base::Vector3d&) const override;
+
+private:
+    std::unique_ptr<Data::Segment> element;
+    Base::Matrix4D placement;
+};
+
 class ImplicitExport NativeFeature: public App::GeoFeature
 {
     PROPERTY_HEADER_WITH_OVERRIDE(Implicit::NativeFeature);

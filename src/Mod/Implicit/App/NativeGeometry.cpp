@@ -8,6 +8,7 @@
 #include <App/FeaturePythonPyImp.h>
 #include <App/Document.h>
 #include <App/ElementNamingUtils.h>
+#include <App/ComplexGeoDataPy.h>
 #include <App/PropertyStandard.h>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
 #include <BRep_TImplicitFace.hxx>
@@ -21,11 +22,19 @@
 #include <Python.h>
 #include <QCryptographicHash>
 #include <cstring>
+#include <cmath>
 #include <sstream>
 
 namespace
 {
 constexpr const char* capsuleName = "ImplicitOCCT.HybridBoundary.v1";
+void placePoint(const Base::Matrix4D& matrix, Base::Vector3d& point)
+{
+    matrix.multVec(point, point);
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        throw Base::ValueError("Native subelement placement produced a nonfinite point");
+    }
+}
 class NativeSegment: public Data::Segment
 {
 public:
@@ -112,7 +121,124 @@ namespace Implicit
 {
 TYPESYSTEM_SOURCE(Implicit::NativeGeometry, Data::ComplexGeoData)
 TYPESYSTEM_SOURCE(Implicit::PropertyNativeGeometry, App::PropertyComplexGeoData)
+TYPESYSTEM_SOURCE(Implicit::NativeElementGeometry, Implicit::NativeGeometry)
 PROPERTY_SOURCE(Implicit::NativeFeature, App::GeoFeature)
+
+NativeElementGeometry::NativeElementGeometry(
+    const NativeGeometry& source,
+    const char* name,
+    const Base::Matrix4D& matrix
+)
+    : placement(matrix)
+{
+    // Only rigid, orientation-preserving placements are qualified here. Do
+    // not carry an unchanged millimetre tolerance through a scale/shear.
+    for (int row = 0; row < 4; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            if (!std::isfinite(matrix[row][column])) {
+                throw Base::ValueError("Nonfinite native subelement placement");
+            }
+        }
+    }
+    if (matrix[3][0] != 0 || matrix[3][1] != 0 || matrix[3][2] != 0 || matrix[3][3] != 1
+        || matrix.hasScale(1e-12) != Base::ScaleType::NoScaling) {
+        throw Base::NotImplementedError("Native subelements require a rigid placement");
+    }
+    boundary = source.boundary;
+    element.reset(source.getSubElementByName(name));
+    ensureElementMap();
+    const auto identity = source.getElementName(name);
+    setElementName(Data::IndexedName("Element", 1), identity.name, 0);
+}
+std::vector<const char*> NativeElementGeometry::getElementTypes() const
+{
+    return {"Element"};
+}
+unsigned long NativeElementGeometry::countSubElements(const char* type) const
+{
+    return element && std::strcmp(type, "Element") == 0 ? 1 : 0;
+}
+Data::Segment* NativeElementGeometry::getSubElement(const char* type, unsigned long index) const
+{
+    if (index != 1 || countSubElements(type) != 1) {
+        throw Base::ValueError("Unknown native selected subelement");
+    }
+    const auto& selected = checkedSegment(element.get(), boundary);
+    auto result = std::make_unique<NativeSegment>();
+    result->owner = selected.owner;
+    result->shape = selected.shape;
+    result->name = "Element1";
+    return result.release();
+}
+void NativeElementGeometry::getLines(
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines,
+    double,
+    uint16_t
+) const
+{
+    getLinesFromSubElement(element.get(), points, lines);
+}
+void NativeElementGeometry::getLinesFromSubElement(
+    const Data::Segment* selected,
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines
+) const
+{
+    const auto& shape = checkedSegment(selected, boundary).shape;
+    if (!shape.IsSame(checkedSegment(element.get(), boundary).shape)) {
+        throw Base::ValueError("Foreign native selected subelement");
+    }
+    const auto start = points.size();
+    boundaryLines(shape, points, lines);
+    for (size_t index = start; index < points.size(); ++index) {
+        placePoint(placement, points[index]);
+    }
+}
+bool NativeElementGeometry::getFirstVertexFromSubElement(
+    const Data::Segment* selected,
+    Base::Vector3d& point
+) const
+{
+    if (!checkedSegment(selected, boundary).shape.IsSame(checkedSegment(element.get(), boundary).shape)) {
+        throw Base::ValueError("Foreign native selected subelement");
+    }
+    if (!NativeGeometry::getFirstVertexFromSubElement(selected, point)) {
+        return false;
+    }
+    placePoint(placement, point);
+    return true;
+}
+Base::BoundBox3d NativeElementGeometry::getBoundBox() const
+{
+    Base::BoundBox3d bounds;
+    if (!element) {
+        return bounds;
+    }
+    if (checkedSegment(element.get(), boundary).shape.ShapeType() == TopAbs_FACE
+        && checkedSegment(element.get(), boundary).shape.IsSame(boundary->Faces.back())) {
+        // Trim lines alone need not enclose the implicit surface's extrema.
+        const auto domain = NativeGeometry::getBoundBox();
+        for (int corner = 0; corner < 8; ++corner) {
+            Base::Vector3d point(
+                corner & 1 ? domain.MaxX : domain.MinX,
+                corner & 2 ? domain.MaxY : domain.MinY,
+                corner & 4 ? domain.MaxZ : domain.MinZ
+            );
+            placePoint(placement, point);
+            bounds.Add(point);
+        }
+    }
+    else {
+        std::vector<Base::Vector3d> points;
+        std::vector<Line> lines;
+        getLines(points, lines, 0);
+        for (const auto& point : points) {
+            bounds.Add(point);
+        }
+    }
+    return bounds;
+}
 
 void NativeGeometry::setBoundary(NativeBoundaryPtr next)
 {
@@ -470,14 +596,21 @@ App::DocumentObject* NativeFeature::getSubObject(
     catch (const Base::ValueError&) {
         return nullptr;
     }
-    if (matrix && transform) {
-        *matrix *= Placement.getValue().toMatrix();
+    Base::Matrix4D placed = matrix ? *matrix : Base::Matrix4D();
+    if (transform) {
+        placed *= Placement.getValue().toMatrix();
     }
-    // Native selection/reference validation does not pretend the subelement
-    // is a Part.Shape. Representation-aware extraction uses nativeGeometry.
     if (pyObject) {
-        Py_INCREF(Py_None);
-        *pyObject = Py_None;
+        auto selected = std::make_unique<NativeElementGeometry>(
+            *static_cast<const NativeGeometry*>(geometry),
+            name,
+            placed
+        );
+        *pyObject = new Data::ComplexGeoDataPy(selected.get());
+        selected.release();  // Wrapper owns the reference-counted snapshot.
+    }
+    if (matrix) {
+        *matrix = placed;
     }
     return const_cast<NativeFeature*>(this);
 }

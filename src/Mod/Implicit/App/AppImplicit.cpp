@@ -684,6 +684,7 @@ PyMOD_INIT_FUNC(Implicit)
     Implicit::Feature::init();
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
     Implicit::NativeGeometry::init();
+    Implicit::NativeElementGeometry::init();
     Implicit::PropertyNativeGeometry::init();
     Implicit::NativeFeature::init();
     Implicit::NativeFeaturePython::init();
