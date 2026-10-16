@@ -22,7 +22,7 @@ if (_spec is None or _spec.origin is None
 from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, info,
                           intersect_ray, dumps, loads, translated, trim,
                           boolean_faces, tessellate, kernel_version, classify_mixed)
-from _ImplicitOCCT import mixed_box as _mixed_box
+from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed
 
 
 def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
@@ -36,7 +36,12 @@ def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
     if not isinstance(box, Part.Shape):
         raise TypeError("box must be a conventional Part.Shape")
     result = _mixed_box(field, box.exportBrepToString(), operation, tolerance, maximum_cells)
-    result["operation"] = operation
+    return _decode_caps(result, operation)
+
+
+def _decode_caps(result, operation=None):
+    if operation is not None:
+        result["operation"] = operation
     result["inside_convention"] = "F<=0"
     result["planar_caps"] = []
     for record in result.pop("planar_caps_brep"):
@@ -44,3 +49,12 @@ def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
         cap.importBrepFromString(record)
         result["planar_caps"].append(cap.Faces[0])
     return result
+
+
+def loads_mixed(record):
+    """Restore shared native topology, not a recipe rebuild or a Part solid.
+
+    Error-bound metadata is retained as provenance, not re-certified:
+    seam_bound_verified is False. Meshes/pointers are never restored.
+    """
+    return _decode_caps(_loads_mixed(record))

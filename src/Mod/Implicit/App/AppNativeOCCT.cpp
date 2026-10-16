@@ -7,6 +7,7 @@
 #include <BRep_ImplicitTool.hxx>
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
+#include <BRepClass3d_ImplicitBoxIO.hxx>
 #include <BRepTools.hxx>
 #include <Geom_ImplicitSphere.hxx>
 #include <Geom_ImplicitGyroid.hxx>
@@ -451,6 +452,8 @@ PyObject* mesh(PyObject* args)
     return result.release();
 }
 
+PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary);
+
 PyObject* mixedBox(PyObject* args)
 {
     PyObject *object, *record;
@@ -494,6 +497,12 @@ PyObject* mixedBox(PyObject* args)
         tolerance,
         maximumCells
     );
+    return boundaryResult(boundary);
+}
+
+PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
+{
+    using Ops = BRepClass3d_ImplicitBox;
     Object result(PyDict_New());
     Object caps(PyList_New(0)), sources(PyList_New(0)), sections(PyList_New(0));
     Object implicit;
@@ -551,10 +560,57 @@ PyObject* mixedBox(PyObject* args)
         || !set(result.get(), "seam_count", PyLong_FromLong(boundary.SeamCount))
         || !set(result.get(), "box_edge_root_count", PyLong_FromLong(boundary.BoxEdgeRootCount))
         || !set(result.get(), "seam_geometric_bound", PyFloat_FromDouble(boundary.GeometricBound))
+        || !set(result.get(), "seam_bound_verified", PyBool_FromLong(boundary.SeamBoundVerified))
+        || !set(
+            result.get(),
+            "operation",
+            PyUnicode_FromString(
+                boundary.Faces.back().Orientation() == TopAbs_FORWARD ? "common" : "box_minus_field"
+            )
+        )
         || !set(result.get(), "solid_validated", PyBool_FromLong(0))) {
         return nullptr;
     }
     return result.release();
+}
+
+PyObject* dumpMixed(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    std::ostringstream output;
+    BRepClass3d_ImplicitBoxIO::Write(*boundary, output);
+    const auto record = output.str();
+    return PyUnicode_FromStringAndSize(record.data(), record.size());
+}
+
+PyObject* loadMixed(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "U", &object)) {
+        return nullptr;
+    }
+    Py_ssize_t size;
+    const char* text = PyUnicode_AsUTF8AndSize(object, &size);
+    if (!text) {
+        return nullptr;
+    }
+    if (size > 16 * 1024 * 1024) {
+        throw Standard_DomainError("native topology record exceeds 16 MiB");
+    }
+    std::istringstream input(std::string(text, static_cast<size_t>(size)));
+    BRepClass3d_ImplicitBox::Boundary boundary;
+    BRepClass3d_ImplicitBoxIO::Read(input, boundary);
+    return boundaryResult(boundary);
 }
 
 PyObject* classifyMixed(PyObject* args)
@@ -625,6 +681,14 @@ PyObject* classifyMixed(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"dumps_mixed",
+     checked<dumpMixed>,
+     METH_VARARGS,
+     "dumps_mixed(boundary_handle) -> explicit shared-topology record"},
+    {"loads_mixed",
+     checked<loadMixed>,
+     METH_VARARGS,
+     "loads_mixed(record) -> native hybrid boundary; stored error bound is not re-certified"},
     {"classify_mixed",
      checked<classifyMixed>,
      METH_VARARGS,

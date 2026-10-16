@@ -57,10 +57,15 @@ def main():
     other = ImplicitMixed.demo(open_contours=True)
     assert other.isValid() and other.BoxEdgeRootCount > 4
     assert other.SeamGeometricBound <= .1
+    snapshot = other.Proxy.native_boundary()
+    restored = native.loads_mixed(native.dumps_mixed(snapshot["boundary_handle"]))
+    assert restored["box_edge_root_count"] == other.BoxEdgeRootCount
+    assert restored["seam_bound_verified"] is False and restored["seams"]
     query = other.Proxy.classify((0, 0, 0))
     assert query["state"] == "near_boundary" and query["has_boundary_witness"]
     assert query["witness_bracket_width"] <= .1 / 256
     App.closeDocument(other.Document.Name)
+    assert native.classify_mixed(restored["boundary_handle"], (0, 0, 0))["state"] == "near_boundary"
     App.closeDocument(doc.Name)
     assert native.value(old, (1, 1, 1)) > -1
     assert native.classify_mixed(old_region, (0, 0, 2))["state"] == "inside"

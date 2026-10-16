@@ -23,6 +23,30 @@ def main():
     assert not native.in_domain(data["implicit_face"], (0, 0, 0))
     old = data["implicit_face"]
     old_region = data["boundary_handle"]
+    record = native.dumps_mixed(old_region)
+    assert record.startswith("OCCT_IMPLICIT_BOX_TOPOLOGY 1 ")
+    assert data["seam_bound_verified"] is True
+    build = native._mixed_box
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("topology restore attempted recipe rebuilding")
+    native._mixed_box = forbidden
+    try:
+        restored = native.loads_mixed(record)
+    finally:
+        native._mixed_box = build
+    assert restored["seam_bound_verified"] is False
+    assert restored["solid_validated"] is False and restored["operation"] == "common"
+    assert restored["seam_count"] == data["seam_count"]
+    assert restored["cap_sources"] == data["cap_sources"]
+    assert all(cap.isValid() for cap in restored["planar_caps"])
+    assert native.classify_mixed(restored["boundary_handle"], (0, 0, 2))["state"] == "inside"
+    for bad in ("garbage", record + "trailing", record[:len(record)//2], "x" * (16*1024*1024 + 1)):
+        try:
+            native.loads_mixed(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid topology record accepted")
     query = obj.Proxy.classify((0, 0, 2))
     assert query["state"] == "inside" and query["distance_lower_bound"] > .1
     assert query["solid_validated"] is False and query["has_boundary_witness"] is False
@@ -106,6 +130,9 @@ def main():
         raise AssertionError("ambiguous cut operand order was accepted")
     App.closeDocument(doc.Name)
     assert native.classify_mixed(old_region, (0, 0, 2))["state"] == "inside"
+    reloaded = native.loads_mixed(native.dumps_mixed(restored["boundary_handle"]))
+    assert reloaded["seam_bound_verified"] is False
+    assert native.classify_mixed(reloaded["boundary_handle"], (0, 0, 2))["state"] == "inside"
     assert native.value(old, (1, 1, 1)) > -1
     print("native implicit mixed box smoke test passed", flush=True)
 
