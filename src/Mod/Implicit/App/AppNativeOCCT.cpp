@@ -864,7 +864,74 @@ PyObject* auditMixedMesh(PyObject* args)
     );
 }
 
+PyObject* checkMixedCoverage(PyObject* args)
+{
+    PyObject* object;
+    double tolerance = .1;
+    int cells = 256, depth = 14;
+    unsigned long long spatial = 2000000, patches = 1000000;
+    if (!PyArg_ParseTuple(args, "O|diiKK", &object, &tolerance, &cells, &depth, &spatial, &patches)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (depth < 1 || depth > 20 || !spatial || spatial > 10000000 || !patches || patches > 4000000) {
+        throw Standard_DomainError("Invalid clipped coverage budgets");
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto mesh = BRepMesh_ImplicitBoundary::Tessellate(*boundary, tolerance, cells);
+    const auto report = BRepMesh_ImplicitBoundary::CheckCoverage(
+        *boundary,
+        mesh,
+        tolerance,
+        depth,
+        size_t(spatial),
+        size_t(patches)
+    );
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:d,s:d,s:d,s:K,s:K,s:i,s:i}",
+        "boundary_proximity_resolved",
+        report.Resolved ? Py_True : Py_False,
+        "topology_validated",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "contact_audit_performed",
+        Py_False,
+        "distance_tolerance",
+        tolerance,
+        "boundary_to_mesh_bound",
+        report.BoundaryToMeshBound,
+        "mesh_to_boundary_bound",
+        report.MeshToBoundaryBound,
+        "spatial_cells",
+        static_cast<unsigned long long>(report.SpatialCells),
+        "triangle_patches",
+        static_cast<unsigned long long>(report.TrianglePatches),
+        "cells",
+        mesh.Cells,
+        "unresolved_triangle",
+        report.UnresolvedTriangle
+    ));
+    if (!result || !set(result.get(), "unresolved_minimum", xyz(report.UnresolvedMinimum.XYZ()))
+        || !set(result.get(), "unresolved_maximum", xyz(report.UnresolvedMaximum.XYZ()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyMethodDef methods[] = {
+    {"check_mixed_coverage",
+     checked<checkMixedCoverage>,
+     METH_VARARGS,
+     "check_mixed_coverage(boundary_handle, tolerance=.1, maximum_cells=256, maximum_depth=14, "
+     "maximum_spatial_cells=2000000, maximum_triangle_patches=1000000) -> whole-box/face and "
+     "mesh-to-clipped-boundary proximity bounds with floating reserves; NOT topology/solid "
+     "validation."},
     {"audit_mixed_mesh",
      checked<auditMixedMesh>,
      METH_VARARGS,
