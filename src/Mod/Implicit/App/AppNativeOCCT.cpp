@@ -808,7 +808,70 @@ PyObject* prepareMixedMesh(PyObject* args)
     return result.release();
 }
 
+PyObject* auditMixedMesh(PyObject* args)
+{
+    PyObject* object;
+    double tolerance = .1;
+    int cells = 256;
+    unsigned long long pairs = 2000000, broad = 50000000;
+    if (!PyArg_ParseTuple(args, "O|diKK", &object, &tolerance, &cells, &pairs, &broad)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!pairs || pairs > 10000000 || !broad || broad > 100000000) {
+        throw Standard_DomainError("Invalid native mesh audit budgets");
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto mesh = BRepMesh_ImplicitBoundary::Tessellate(*boundary, tolerance, cells);
+    const auto audit = BRepMesh_ImplicitBoundary::Audit(mesh, size_t(pairs), size_t(broad));
+    using State = BRepMesh_ImplicitBoundary::MeshAudit::State;
+    const char* state = audit.Status == State::Clear ? "clear"
+        : audit.Status == State::Contact             ? "contact_or_unresolved"
+                                                     : "limit";
+    return Py_BuildValue(
+        "{s:s,s:O,s:O,s:O,s:i,s:i,s:K,s:K,s:K,s:K,s:d,s:i,s:K}",
+        "state",
+        state,
+        "triangle_contacts_clear",
+        audit.Status == State::Clear ? Py_True : Py_False,
+        "surface_coverage_verified",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "first_triangle",
+        audit.FirstTriangle,
+        "second_triangle",
+        audit.SecondTriangle,
+        "pair_tests",
+        static_cast<unsigned long long>(audit.PairTests),
+        "broad_tests",
+        static_cast<unsigned long long>(audit.BroadTests),
+        "cap_triangle_count",
+        static_cast<unsigned long long>(mesh.CapTriangles.size()),
+        "implicit_triangle_count",
+        static_cast<unsigned long long>(mesh.ImplicitTriangles.size()),
+        "distance_tolerance",
+        tolerance,
+        "cells",
+        mesh.Cells,
+        "node_count",
+        static_cast<unsigned long long>(mesh.Nodes.size())
+    );
+}
+
 PyMethodDef methods[] = {
+    {"audit_mixed_mesh",
+     checked<auditMixedMesh>,
+     METH_VARARGS,
+     "audit_mixed_mesh(boundary_handle, tolerance=.1, maximum_cells=256, "
+     "maximum_pair_tests=2000000, "
+     "maximum_broad_tests=50000000) -> exact stored-coordinate triangle contact audit; "
+     "not field coverage or native-solid validation. Caps precede implicit triangle IDs."},
     {"tessellate_mixed",
      checked<prepareMixedMesh<true>>,
      METH_VARARGS,
