@@ -71,6 +71,47 @@ def main():
     caps, seams = view._coordinates, view._seam_coordinates
     assert caps.point.getNum() > 0 and seams.point.getNum() > 0
     retained_geometry = check_subelements(obj)
+    # App::Link must render/pick the native target and extract its placed
+    # selected geometry without inventing a Part shape or applying pose twice.
+    from pivy import coin
+    instance = doc.addObject("App::Link", "NativeInstance")
+    instance.LinkedObject = obj
+    instance.LinkTransform = True
+    instance.LinkPlacement = App.Placement(App.Vector(11, 2, -3), App.Rotation(17, 0, 0))
+    doc.recompute()
+    Gui.updateGui()
+    cap = obj.Proxy._mesh["faces"][0]
+    triangle = cap["triangles"][0]
+    center = sum((App.Vector(cap["vertices"][i]) for i in triangle), App.Vector()) / 3
+    normal = instance.LinkPlacement.Rotation.multVec(App.Vector(cap["normals"][triangle[0]]))
+    center = instance.LinkPlacement.multVec(center)
+    pick = coin.SoRayPickAction(coin.SbViewportRegion(512, 512))
+    pick.setPickAll(True)
+    pick.setRay(coin.SbVec3f(*(center + normal * 10)), coin.SbVec3f(*(-normal)), 0., 20.)
+    pick.apply(instance.ViewObject.RootNode)
+    names = [instance.ViewObject.getElementPicked(hit) for hit in pick.getPickedPointList()]
+    assert "Cap1" in names, names
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(instance, "Cap1")
+    linked_selection = Gui.Selection.getSelectionEx()
+    assert len(linked_selection) == 1 and len(linked_selection[0].SubObjects) == 1
+    linked_geometry = linked_selection[0].SubObjects[0]
+    expected = [instance.LinkPlacement.multVec(p)
+                for p in retained_geometry.getLinesFromSubElement("Cap", 1)[0]]
+    actual = linked_geometry.getLines(.1)[0]
+    assert len(actual) == len(expected)
+    assert all((a - b).Length < 1e-10 for a, b in zip(actual, expected))
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(instance)
+    whole_selection = Gui.Selection.getSelectionEx()[0]
+    assert not whole_selection.SubElementNames and not whole_selection.SubObjects
+    whole_geometry = whole_selection.Object.getSubObject("")
+    assert whole_geometry.getElementTypes() == ["NativeFace", "Cap", "Seam"]
+    expected = [instance.LinkPlacement.multVec(p) for p in retained_geometry.getLines(.1)[0]]
+    actual = whole_geometry.getLines(.1)[0]
+    assert len(actual) == len(expected)
+    assert all((a - b).Length < 1e-10 for a, b in zip(actual, expected))
+    doc.removeObject(instance.Name)
     retained_name = ";" + retained_geometry.getElementName("Cap1", 1) + ".Cap1"
     old = obj.Proxy.native_boundary()["implicit_face"]
     old_region = obj.Proxy.native_boundary()["boundary_handle"]

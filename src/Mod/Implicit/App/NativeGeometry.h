@@ -85,6 +85,27 @@ private:
     NativeGeometry data;
 };
 
+// Whole native boundary snapshot with pre-applied subobject-path placement.
+class ImplicitExport NativePlacedGeometry: public NativeGeometry
+{
+    TYPESYSTEM_HEADER_WITH_OVERRIDE();
+
+public:
+    NativePlacedGeometry() = default;
+    NativePlacedGeometry(const NativeGeometry&, const Base::Matrix4D&);
+    Base::BoundBox3d getBoundBox() const override;
+    void getLines(std::vector<Base::Vector3d>&, std::vector<Line>&, double, uint16_t = 0) const override;
+    void getLinesFromSubElement(
+        const Data::Segment*,
+        std::vector<Base::Vector3d>&,
+        std::vector<Line>&
+    ) const override;
+    bool getFirstVertexFromSubElement(const Data::Segment*, Base::Vector3d&) const override;
+
+private:
+    Base::Matrix4D placement;
+};
+
 // Owned, pre-placed subobject result for representation-aware consumers. It
 // exposes one Element1, not an editable Part shape or a complete surface mesh.
 class ImplicitExport NativeElementGeometry: public NativeGeometry

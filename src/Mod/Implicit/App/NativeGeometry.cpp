@@ -35,6 +35,37 @@ void placePoint(const Base::Matrix4D& matrix, Base::Vector3d& point)
         throw Base::ValueError("Native subelement placement produced a nonfinite point");
     }
 }
+void requireRigid(const Base::Matrix4D& matrix)
+{
+    for (int row = 0; row < 4; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            if (!std::isfinite(matrix[row][column])) {
+                throw Base::ValueError("Nonfinite native geometry placement");
+            }
+        }
+    }
+    if (matrix[3][0] != 0 || matrix[3][1] != 0 || matrix[3][2] != 0 || matrix[3][3] != 1
+        || matrix.hasScale(1e-12) != Base::ScaleType::NoScaling) {
+        throw Base::NotImplementedError("Native geometry requires a rigid placement");
+    }
+}
+Base::BoundBox3d placedBounds(const Base::BoundBox3d& domain, const Base::Matrix4D& matrix)
+{
+    Base::BoundBox3d bounds;
+    if (!domain.IsValid()) {
+        return bounds;
+    }
+    for (int corner = 0; corner < 8; ++corner) {
+        Base::Vector3d point(
+            corner & 1 ? domain.MaxX : domain.MinX,
+            corner & 2 ? domain.MaxY : domain.MinY,
+            corner & 4 ? domain.MaxZ : domain.MinZ
+        );
+        placePoint(matrix, point);
+        bounds.Add(point);
+    }
+    return bounds;
+}
 class NativeSegment: public Data::Segment
 {
 public:
@@ -122,7 +153,55 @@ namespace Implicit
 TYPESYSTEM_SOURCE(Implicit::NativeGeometry, Data::ComplexGeoData)
 TYPESYSTEM_SOURCE(Implicit::PropertyNativeGeometry, App::PropertyComplexGeoData)
 TYPESYSTEM_SOURCE(Implicit::NativeElementGeometry, Implicit::NativeGeometry)
+TYPESYSTEM_SOURCE(Implicit::NativePlacedGeometry, Implicit::NativeGeometry)
 PROPERTY_SOURCE(Implicit::NativeFeature, App::GeoFeature)
+
+NativePlacedGeometry::NativePlacedGeometry(const NativeGeometry& source, const Base::Matrix4D& matrix)
+    : placement(matrix)
+{
+    requireRigid(matrix);
+    setBoundary(source.boundary);
+}
+Base::BoundBox3d NativePlacedGeometry::getBoundBox() const
+{
+    return placedBounds(NativeGeometry::getBoundBox(), placement);
+}
+void NativePlacedGeometry::getLines(
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines,
+    double accuracy,
+    uint16_t flags
+) const
+{
+    const auto start = points.size();
+    NativeGeometry::getLines(points, lines, accuracy, flags);
+    for (size_t i = start; i < points.size(); ++i) {
+        placePoint(placement, points[i]);
+    }
+}
+void NativePlacedGeometry::getLinesFromSubElement(
+    const Data::Segment* selected,
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines
+) const
+{
+    const auto start = points.size();
+    NativeGeometry::getLinesFromSubElement(selected, points, lines);
+    for (size_t i = start; i < points.size(); ++i) {
+        placePoint(placement, points[i]);
+    }
+}
+bool NativePlacedGeometry::getFirstVertexFromSubElement(
+    const Data::Segment* selected,
+    Base::Vector3d& point
+) const
+{
+    if (!NativeGeometry::getFirstVertexFromSubElement(selected, point)) {
+        return false;
+    }
+    placePoint(placement, point);
+    return true;
+}
 
 NativeElementGeometry::NativeElementGeometry(
     const NativeGeometry& source,
@@ -133,17 +212,7 @@ NativeElementGeometry::NativeElementGeometry(
 {
     // Only rigid, orientation-preserving placements are qualified here. Do
     // not carry an unchanged millimetre tolerance through a scale/shear.
-    for (int row = 0; row < 4; ++row) {
-        for (int column = 0; column < 4; ++column) {
-            if (!std::isfinite(matrix[row][column])) {
-                throw Base::ValueError("Nonfinite native subelement placement");
-            }
-        }
-    }
-    if (matrix[3][0] != 0 || matrix[3][1] != 0 || matrix[3][2] != 0 || matrix[3][3] != 1
-        || matrix.hasScale(1e-12) != Base::ScaleType::NoScaling) {
-        throw Base::NotImplementedError("Native subelements require a rigid placement");
-    }
+    requireRigid(matrix);
     boundary = source.boundary;
     element.reset(source.getSubElementByName(name));
     ensureElementMap();
@@ -218,16 +287,7 @@ Base::BoundBox3d NativeElementGeometry::getBoundBox() const
     if (checkedSegment(element.get(), boundary).shape.ShapeType() == TopAbs_FACE
         && checkedSegment(element.get(), boundary).shape.IsSame(boundary->Faces.back())) {
         // Trim lines alone need not enclose the implicit surface's extrema.
-        const auto domain = NativeGeometry::getBoundBox();
-        for (int corner = 0; corner < 8; ++corner) {
-            Base::Vector3d point(
-                corner & 1 ? domain.MaxX : domain.MinX,
-                corner & 2 ? domain.MaxY : domain.MinY,
-                corner & 4 ? domain.MaxZ : domain.MinZ
-            );
-            placePoint(placement, point);
-            bounds.Add(point);
-        }
+        return placedBounds(NativeGeometry::getBoundBox(), placement);
     }
     else {
         std::vector<Base::Vector3d> points;
@@ -586,7 +646,23 @@ App::DocumentObject* NativeFeature::getSubObject(
     int depth
 ) const
 {
-    if (!name || !*name || (std::strchr(name, '.') && !Data::isMappedElement(name))) {
+    if (!name || !*name) {
+        Base::Matrix4D placed = matrix ? *matrix : Base::Matrix4D();
+        auto* owner = App::GeoFeature::getSubObject(name, pyObject, &placed, transform, depth);
+        if (owner == this && pyObject && !*pyObject && !Geometry.isNull()) {
+            auto snapshot = std::make_unique<NativePlacedGeometry>(
+                *static_cast<const NativeGeometry*>(Geometry.getComplexData()),
+                placed
+            );
+            *pyObject = new Data::ComplexGeoDataPy(snapshot.get());
+            snapshot.release();
+        }
+        if (matrix) {
+            *matrix = placed;
+        }
+        return owner;
+    }
+    if (std::strchr(name, '.') && !Data::isMappedElement(name)) {
         return App::GeoFeature::getSubObject(name, pyObject, matrix, transform, depth);
     }
     const auto* geometry = Geometry.getComplexData();
