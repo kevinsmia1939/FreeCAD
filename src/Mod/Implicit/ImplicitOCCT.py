@@ -22,7 +22,7 @@ if (_spec is None or _spec.origin is None
 from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, info,
                           intersect_ray, dumps, loads, translated, trim,
                           boolean_faces, tessellate, kernel_version, classify_mixed)
-from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed
+from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed, inspect_mixed as _inspect_mixed
 
 
 def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
@@ -58,3 +58,8 @@ def loads_mixed(record):
     seam_bound_verified is False. Meshes/pointers are never restored.
     """
     return _decode_caps(_loads_mixed(record))
+
+
+def inspect_mixed(handle):
+    """Inspect an immutable native/property snapshot without numerical rebuilding."""
+    return _decode_caps(_inspect_mixed(handle))

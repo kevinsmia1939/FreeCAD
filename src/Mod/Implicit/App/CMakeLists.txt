@@ -20,6 +20,10 @@ add_library(Implicit SHARED ${Implicit_SRCS})
 
 # Never build/load native OCCT 8 face code against the OCCT 7 compatibility ABI.
 if(FREECAD_OCCT_BUILD_DIR AND OCC_VERSION_STRING VERSION_GREATER_EQUAL 8.0.0)
+    target_sources(Implicit PRIVATE NativeGeometry.h NativeGeometry.cpp)
+    target_compile_definitions(Implicit PRIVATE IMPLICIT_WITH_NATIVE_GEOMETRY)
+    target_include_directories(Implicit SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
+    target_link_libraries(Implicit TKTopAlgo)
     if(NOT EXISTS "${OCC_INCLUDE_DIR}/BRep_ImplicitTool.hxx")
         message(FATAL_ERROR "Selected OCCT build lacks native implicit faces")
     endif()

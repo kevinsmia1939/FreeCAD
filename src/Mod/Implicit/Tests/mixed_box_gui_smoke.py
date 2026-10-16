@@ -30,11 +30,20 @@ def main():
         filename = os.path.join(directory, "mixed.FCStd")
         name = obj.Name
         doc.saveAs(filename)
-        App.closeDocument(doc.Name)
-        doc = App.openDocument(filename)
-        doc.recompute()
-        obj = doc.getObject(name)
+        build = native._mixed_box
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("GUI topology restore attempted numerical rebuilding")
+        native._mixed_box = forbidden
+        try:
+            App.closeDocument(doc.Name)
+            doc = App.openDocument(filename)
+            obj = doc.getObject(name)
+            assert obj.ViewObject.Proxy._coordinates.point.getNum() > 0
+            doc.recompute()
+        finally:
+            native._mixed_box = build
         assert obj.isValid() and obj.Proxy.native_boundary()["seam_count"] == 1
+        assert obj.Proxy.native_boundary()["seam_bound_verified"] is False
         view = obj.ViewObject.Proxy
         assert view._coordinates.point.getNum() > 0 and view._seam_coordinates.point.getNum() > 0
     obj.Field.IsoValue = 0

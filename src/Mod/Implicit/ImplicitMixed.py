@@ -1,32 +1,91 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Restricted native gyroid/Part-box boundaries; not generic Part Boolean solids.
 
-Only operand links, settings and schema persist. Native topology/caps/seams are
-reconstructed. Display shows planar caps and seams, NOT a conforming implicit
+The native geometry property persists math and shared topology. Operand links
+remain live; display meshes are transient. Display shows caps/seams, NOT a conforming implicit
 surface mesh. No mesh-wide accuracy or manufacturing-solid claim is made.
 """
 import FreeCAD as App
+import Implicit  # Register native property/owner types before document restoration.
+import hashlib
+import json
 
 
 class MixedBoundary:
     def __init__(self, obj):
         self._boundary = self._mesh = self._section = None
         for name, kind, value in (
-            ("MixedSchema", "Integer", 1), ("Field", "Link", None),
+            ("MixedSchema", "Integer", 2), ("Field", "Link", None),
             ("Box", "Link", None), ("GeometricTolerance", "Length", .1),
             ("MaximumCells", "Integer", 512), ("SeamCount", "Integer", 0),
             ("BoxEdgeRootCount", "Integer", 0),
             ("PlanarCapCount", "Integer", 0), ("SeamGeometricBound", "Float", 0),
+            ("SeamBoundVerified", "Bool", False),
             ("BackendStatus", "String", ""), ("NativeRevision", "Integer", 0)):
             obj.addProperty("App::Property" + kind, name, "Native mixed boundary")
             if value is not None:
                 setattr(obj, name, value)
         obj.addProperty("App::PropertyEnumeration", "Operation", "Native mixed boundary")
         obj.Operation = ["Common", "BoxMinusField"]
-        for name in ("MixedSchema", "SeamCount", "BoxEdgeRootCount", "PlanarCapCount", "SeamGeometricBound", "BackendStatus"):
+        for name in ("MixedSchema", "SeamCount", "BoxEdgeRootCount", "PlanarCapCount", "SeamGeometricBound", "SeamBoundVerified", "BackendStatus"):
             obj.setEditorMode(name, 1)
         obj.setEditorMode("NativeRevision", 2)
+        self._ensure_geometry(obj)
+        self._restore_failed = False
+        self._restoring = False
+        self._publishing = False
         obj.Proxy = self
+
+    @staticmethod
+    def _ensure_geometry(obj):
+        if "Geometry" not in obj.PropertiesList:
+            obj.addProperty("Implicit::PropertyNativeGeometry", "Geometry", "Native geometry")
+        obj.setEditorMode("Geometry", 1)
+        if "InputFingerprint" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyString", "InputFingerprint", "Native geometry")
+        obj.setEditorMode("InputFingerprint", 2)
+        if "SeamBoundVerified" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyBool", "SeamBoundVerified", "Native geometry")
+        obj.setEditorMode("SeamBoundVerified", 1)
+
+    @staticmethod
+    def _fingerprint(obj):
+        # Supported input geometry, not mutable BRep checked/free flags or mesh
+        # caches. Canonicalize signed zero so FCStd reload does not force retracing.
+        def xyz(vector):
+            return [float(v) if v != 0 else 0.0 for v in vector]
+        def vertices(shape):
+            return sorted(xyz(v.Point) for v in shape.Vertexes)
+        shape = obj.Box.Shape
+        descriptor = {
+            "schema": 1, "field": obj.Field.Name, "box": obj.Box.Name,
+            "period": obj.Field.Period.Value, "iso": obj.Field.IsoValue,
+            "minimum": xyz(obj.Field.DomainMin), "maximum": xyz(obj.Field.DomainMax),
+            "operation": str(obj.Operation), "tolerance": obj.GeometricTolerance.Value,
+            "budget": obj.MaximumCells, "shape_type": shape.ShapeType,
+            "vertices": vertices(shape),
+            "edges": sorted((type(e.Curve).__name__, vertices(e)) for e in shape.Edges),
+            "faces": sorted((type(f.Surface).__name__, xyz(f.normalAt(0, 0)), vertices(f)) for f in shape.Faces),
+        }
+        return hashlib.sha256(json.dumps(descriptor, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+    def _display(self, obj, data):
+        meshes = []
+        for cap in data["planar_caps"]:
+            vertices, triangles = cap.tessellate(obj.GeometricTolerance.Value)
+            normal = tuple(cap.normalAt(0, 0))
+            meshes.append({"vertices": [tuple(v) for v in vertices],
+                           "triangles": triangles, "normals": [normal] * len(vertices)})
+        self._mesh = {"faces": meshes}
+        self._section = {"curves": [{"points": p} for p in data["seams"]]}
+        self._boundary = data
+        obj.SeamCount, obj.PlanarCapCount = data["seam_count"], len(data["planar_caps"])
+        obj.BoxEdgeRootCount = data["box_edge_root_count"]
+        obj.SeamGeometricBound = data["seam_geometric_bound"]
+        obj.SeamBoundVerified = data["seam_bound_verified"]
+        obj.BackendStatus = ("Native geometry property; caps/seams preview only; "
+                             "NOT a validated Part solid; seam bound "
+                             + ("verified by tracing" if data["seam_bound_verified"] else "stored, not re-certified"))
 
     def native_boundary(self):
         """Owned snapshot of the last successful recompute; never a Part solid."""
@@ -60,10 +119,16 @@ class MixedBoundary:
             obj.setEditorMode("BoxEdgeRootCount", 1)
         obj.BoxEdgeRootCount = 0
         obj.SeamGeometricBound = 0
+        if "SeamBoundVerified" in obj.PropertiesList:
+            obj.SeamBoundVerified = False
         try:
             import ImplicitOCCT as native
-            if obj.MixedSchema != 1:
+            if getattr(self, "_restore_failed", False):
+                raise RuntimeError("Native topology restoration failed; explicit Proxy.rebuild(obj) required")
+            if obj.MixedSchema not in (1, 2):
                 raise ValueError("Unsupported native mixed-boundary schema")
+            self._ensure_geometry(obj)
+            obj.MixedSchema = 2
             field, box = obj.Field, obj.Box
             if (field is None or field.TypeId != "Implicit::Feature"
                     or not field.isValid() or str(field.Operation) != "Definition"
@@ -73,41 +138,89 @@ class MixedBoundary:
             if (box is None or not box.isValid() or not box.isDerivedFrom("Part::Feature")
                     or box.getGlobalPlacement() != box.Placement):
                 raise ValueError("Box must link a valid conventional Part solid")
-            face = native.gyroid(field.Period, field.IsoValue, tuple(field.DomainMin),
-                                 tuple(field.DomainMax), obj.GeometricTolerance.Value)
-            mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
-            data = native.mixed_box(face, box.Shape, mode,
-                                    obj.GeometricTolerance.Value, obj.MaximumCells)
+            fingerprint = self._fingerprint(obj)
+            if obj.Geometry is not None and obj.InputFingerprint == fingerprint:
+                data = native.inspect_mixed(obj.Geometry)
+                mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
+                metadata = native.info(data["implicit_face"])
+                points = [tuple(v.Point) for v in box.Shape.Vertexes]
+                minimum = tuple(min(p[a] for p in points) for a in range(3))
+                maximum = tuple(max(p[a] for p in points) for a in range(3))
+                if (data["period"] != field.Period.Value or data["isovalue"] != field.IsoValue
+                        or data["operation"] != mode or tuple(metadata["minimum"]) != minimum
+                        or tuple(metadata["maximum"]) != maximum
+                        or metadata["tolerance"] != obj.GeometricTolerance.Value):
+                    self._restore_failed = True
+                    raise ValueError("Stored native geometry disagrees with unchanged inputs; explicit rebuild required")
+            else:
+                face = native.gyroid(field.Period, field.IsoValue, tuple(field.DomainMin),
+                                     tuple(field.DomainMax), obj.GeometricTolerance.Value)
+                mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
+                data = native.mixed_box(face, box.Shape, mode,
+                                        obj.GeometricTolerance.Value, obj.MaximumCells)
+                self._publishing = True
+                try:
+                    obj.Geometry = data["boundary_handle"]
+                    obj.InputFingerprint = fingerprint
+                finally:
+                    self._publishing = False
             # Only conventional planar caps use Part meshing. The authoritative
             # implicit face is NEVER passed to tessellate/BRepMesh or Part.Shape.
-            meshes = []
-            for cap in data["planar_caps"]:
-                vertices, triangles = cap.tessellate(obj.GeometricTolerance.Value)
-                normal = tuple(cap.normalAt(0, 0))
-                meshes.append({"vertices": [tuple(v) for v in vertices],
-                               "triangles": triangles, "normals": [normal] * len(vertices)})
-            self._mesh = {"faces": meshes}
-            self._section = {"curves": [{"points": p} for p in data["seams"]]}
-            self._boundary = data
-            obj.SeamCount, obj.PlanarCapCount = data["seam_count"], len(data["planar_caps"])
-            obj.BoxEdgeRootCount = data["box_edge_root_count"]
-            obj.SeamGeometricBound = data["seam_geometric_bound"]
-            obj.BackendStatus = ("Native hybrid boundary; caps/seams preview only; "
-                                 "NOT a validated Part solid or conforming surface mesh")
+            self._display(obj, data)
         except Exception as error:
             self._boundary = self._mesh = self._section = None
             obj.SeamCount = obj.PlanarCapCount = 0
             obj.BoxEdgeRootCount = 0
             obj.SeamGeometricBound = 0
+            obj.SeamBoundVerified = False
             obj.BackendStatus = "Unsupported/failed: " + str(error)
+            self._publishing = True
+            try:
+                if "Geometry" in obj.PropertiesList:
+                    obj.Geometry = None
+                if "InputFingerprint" in obj.PropertiesList and not getattr(self, "_restore_failed", False):
+                    obj.InputFingerprint = ""
+            finally:
+                self._publishing = False
             raise
         finally:
             obj.NativeRevision += 1
 
     def onDocumentRestored(self, obj):
-        # Recompute from links after restore, not during this callback: linked
-        # Part objects may not yet have reconstructed their conventional shapes.
         self._boundary = self._mesh = self._section = None
+        self._ensure_geometry(obj)  # Migrate old schema-1 recipe owners in place.
+        self._restore_failed = False
+        self._publishing = False
+        try:
+            import ImplicitOCCT as native
+            if obj.Geometry is not None:
+                self._display(obj, native.inspect_mixed(obj.Geometry))
+                obj.NativeRevision += 1
+            elif obj.InputFingerprint:
+                self._restore_failed = True
+                obj.BackendStatus = "Native topology restoration failed; explicit rebuild required"
+        finally:
+            self._restoring = False
+
+    def onChanged(self, obj, prop):
+        if (prop == "Geometry" and not getattr(self, "_restoring", False)
+                and not getattr(self, "_publishing", False)):
+            self._boundary = self._mesh = self._section = None
+            for name in ("SeamCount", "PlanarCapCount", "BoxEdgeRootCount", "SeamGeometricBound"):
+                if name in obj.PropertiesList:
+                    setattr(obj, name, 0)
+            if "SeamBoundVerified" in obj.PropertiesList:
+                obj.SeamBoundVerified = False
+            if "InputFingerprint" in obj.PropertiesList:
+                obj.InputFingerprint = ""
+            if "NativeRevision" in obj.PropertiesList:
+                obj.NativeRevision += 1
+
+    def rebuild(self, obj):
+        """Explicit repair/retrace; never silently substitute for failed restore."""
+        self._restore_failed = False
+        obj.InputFingerprint = ""
+        self.execute(obj)
 
     def mustExecute(self, _obj):
         return self._boundary is None
@@ -117,6 +230,9 @@ class MixedBoundary:
 
     def loads(self, _state):
         self._boundary = self._mesh = self._section = None
+        self._restoring = True
+        self._publishing = False
+        self._restore_failed = False
 
 
 from ImplicitNative import NativeBoundaryView
@@ -161,7 +277,7 @@ def create(field, box, operation="Common"):
     document = field.Document
     document.openTransaction("Create native mixed boundary")
     try:
-        obj = document.addObject("App::FeaturePython", "NativeMixedBoundary")
+        obj = document.addObject("Implicit::NativeFeaturePython", "NativeMixedBoundary")
         MixedBoundary(obj)
         obj.Field, obj.Box, obj.Operation = field, box, operation
         obj.Label = "Native " + operation + " (experimental caps/seams)"

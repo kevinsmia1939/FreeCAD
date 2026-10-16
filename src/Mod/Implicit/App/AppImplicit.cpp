@@ -10,6 +10,9 @@
 #include "Feature.h"
 #include "FieldGraph.h"
 #include "SurfaceMesh.h"
+#ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+# include "NativeGeometry.h"
+#endif
 
 namespace Implicit
 {
@@ -112,7 +115,8 @@ public:
             "cancellationToken=None) -> mesh, triangle field bound and refinement history"
         );
         add_varargs_method(
-            "intersectRay", &Module::intersectRay,
+            "intersectRay",
+            &Module::intersectRay,
             "intersectRay(feature, origin, direction, minDistance, maxDistance, samples=512, "
             "distanceTolerance=1e-7) -> local sampled root dictionaries; direction is normalized"
         );
@@ -352,10 +356,21 @@ private:
         Base::Vector3d origin, direction;
         double minimum, maximum, tolerance = 1e-7;
         int samples = 512;
-        if (!PyArg_ParseTuple(args.ptr(), "O(ddd)(ddd)dd|id", &object,
-                              &origin.x, &origin.y, &origin.z,
-                              &direction.x, &direction.y, &direction.z,
-                              &minimum, &maximum, &samples, &tolerance)) {
+        if (!PyArg_ParseTuple(
+                args.ptr(),
+                "O(ddd)(ddd)dd|id",
+                &object,
+                &origin.x,
+                &origin.y,
+                &origin.z,
+                &direction.x,
+                &direction.y,
+                &direction.z,
+                &minimum,
+                &maximum,
+                &samples,
+                &tolerance
+            )) {
             throw Py::Exception();
         }
         const Shape shape = featureFromPython(object)->makeShape();
@@ -640,5 +655,11 @@ PyMOD_INIT_FUNC(Implicit)
 {
     PyObject* module = Implicit::initModule();
     Implicit::Feature::init();
+#ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+    Implicit::NativeGeometry::init();
+    Implicit::PropertyNativeGeometry::init();
+    Implicit::NativeFeature::init();
+    Implicit::NativeFeaturePython::init();
+#endif
     PyMOD_Return(module);
 }

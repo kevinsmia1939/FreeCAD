@@ -8,6 +8,7 @@
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
+#include <BRep_TImplicitFace.hxx>
 #include <BRepTools.hxx>
 #include <Geom_ImplicitSphere.hxx>
 #include <Geom_ImplicitGyroid.hxx>
@@ -503,6 +504,8 @@ PyObject* mixedBox(PyObject* args)
 PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
 {
     using Ops = BRepClass3d_ImplicitBox;
+    const auto geometry = occ::down_cast<BRep_TImplicitFace>(boundary.Faces.back().TShape());
+    const auto gyroid = occ::down_cast<Geom_ImplicitGyroid>(geometry->Field());
     Object result(PyDict_New());
     Object caps(PyList_New(0)), sources(PyList_New(0)), sections(PyList_New(0));
     Object implicit;
@@ -561,6 +564,8 @@ PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
         || !set(result.get(), "box_edge_root_count", PyLong_FromLong(boundary.BoxEdgeRootCount))
         || !set(result.get(), "seam_geometric_bound", PyFloat_FromDouble(boundary.GeometricBound))
         || !set(result.get(), "seam_bound_verified", PyBool_FromLong(boundary.SeamBoundVerified))
+        || !set(result.get(), "period", PyFloat_FromDouble(gyroid->Period()))
+        || !set(result.get(), "isovalue", PyFloat_FromDouble(gyroid->IsoValue()))
         || !set(
             result.get(),
             "operation",
@@ -572,6 +577,21 @@ PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
         return nullptr;
     }
     return result.release();
+}
+
+PyObject* inspectMixed(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    return boundaryResult(*static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    ));
 }
 
 PyObject* dumpMixed(PyObject* args)
@@ -681,6 +701,10 @@ PyObject* classifyMixed(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"inspect_mixed",
+     checked<inspectMixed>,
+     METH_VARARGS,
+     "inspect_mixed(boundary_handle) -> snapshot metadata/cap copies; no rebuilding"},
     {"dumps_mixed",
      checked<dumpMixed>,
      METH_VARARGS,
