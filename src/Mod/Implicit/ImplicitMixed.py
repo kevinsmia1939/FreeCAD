@@ -2,8 +2,8 @@
 """Restricted native gyroid/Part-box boundaries; not generic Part Boolean solids.
 
 The native geometry property persists math and shared topology. Operand links
-remain live; display meshes are transient. Display shows caps/seams, NOT a conforming implicit
-surface mesh. No mesh-wide accuracy or manufacturing-solid claim is made.
+remain live; display meshes are transient. Caps/seams are the default preview;
+an opt-in trim-conforming surface candidate does not certify coverage or solids.
 """
 import FreeCAD as App
 import Implicit  # Register native property/owner types before document restoration.
@@ -83,7 +83,7 @@ class MixedBoundary:
         obj.BoxEdgeRootCount = data["box_edge_root_count"]
         obj.SeamGeometricBound = data["seam_geometric_bound"]
         obj.SeamBoundVerified = data["seam_bound_verified"]
-        obj.BackendStatus = ("Native geometry property; caps/seams preview only; "
+        obj.BackendStatus = ("Native geometry property; default caps/seams preview; "
                              "NOT a validated Part solid; seam bound "
                              + ("verified by tracing" if data["seam_bound_verified"] else "stored, not re-certified"))
 
@@ -244,6 +244,7 @@ class MixedBoundaryView(NativeBoundaryView):
         self._view = view
         self._task = None
         self._native_geometry = None
+        self._surface_key = self._surface_mesh = None
         self._cap_nodes, self._seam_nodes = [], []
         super().attach(view)
         # Keep aggregate buffers for diagnostics, but render individual native
@@ -259,7 +260,77 @@ class MixedBoundaryView(NativeBoundaryView):
         separator.removeChild(self._seam_lines)
         self._seam_root = separator
         self._root.addChild(separator)
+        self._surface_coordinates = coin.SoCoordinate3()
+        self._surface_normals = coin.SoNormal()
+        self._surface_faces = coin.SoIndexedFaceSet()
+        binding = coin.SoNormalBinding()
+        binding.value = coin.SoNormalBinding.PER_FACE
+        self._surface_root = coin.SoSeparator()
+        for node in (self._surface_coordinates, self._surface_normals, binding, self._surface_faces):
+            self._surface_root.addChild(node)
+        self._root.addChild(self._surface_root)
+        for name, kind, value in (("ShowImplicitSurface", "Bool", False),
+                                  ("SurfaceTolerance", "Length", .1),
+                                  ("SurfaceMaximumCells", "Integer", 256),
+                                  ("SurfacePreviewStatus", "String", "Disabled")):
+            if name not in view.PropertiesList:
+                view.addProperty("App::Property" + kind, name, "Experimental surface preview")
+                setattr(view, name, value)
+        view.setEditorMode("SurfacePreviewStatus", 1)
         self.updateData(view.Object, "NativeRevision")
+
+    def onChanged(self, view, prop):
+        super().onChanged(view, prop)
+        if (prop in ("ShowImplicitSurface", "SurfaceTolerance", "SurfaceMaximumCells")
+                and hasattr(self, "_surface_faces")
+                and all(name in view.PropertiesList for name in
+                        ("ShowImplicitSurface", "SurfaceTolerance", "SurfaceMaximumCells", "SurfacePreviewStatus"))):
+            self.updateData(view.Object, "NativeRevision")
+
+    def _update_surface(self, obj):
+        if not hasattr(self, "_surface_faces") or "SurfacePreviewStatus" not in self._view.PropertiesList:
+            return None
+        view = self._view
+        key = (obj.NativeRevision, bool(view.ShowImplicitSurface),
+               view.SurfaceTolerance.Value, view.SurfaceMaximumCells)
+        if key == self._surface_key:
+            return self._surface_mesh
+        self._surface_key = key
+        self._surface_mesh = None
+        self._surface_faces.coordIndex.setNum(0)
+        self._surface_coordinates.point.setNum(0)
+        self._surface_normals.vector.setNum(0)
+        if not view.ShowImplicitSurface:
+            view.SurfacePreviewStatus = "Disabled; caps/seams only"
+            return None
+        if obj.Geometry is None or getattr(obj.Proxy, "_boundary", None) is None:
+            view.SurfacePreviewStatus = "No successful native boundary"
+            return None
+        try:
+            import ImplicitOCCT as native
+            mesh = native.tessellate_mixed(obj.Geometry, view.SurfaceTolerance.Value,
+                                          view.SurfaceMaximumCells)
+            vertices, triangles = mesh["vertices"], mesh["implicit_triangles"]
+            normals = []
+            for a, b, c in triangles:
+                p, q, r = (App.Vector(*vertices[i]) for i in (a, b, c))
+                normals.append(tuple((q - p).cross(r - p).normalize()))
+            indices = [i for tri in triangles for i in (*tri, -1)]
+            self._surface_coordinates.point.setValues(0, len(vertices), vertices)
+            self._surface_normals.vector.setValues(0, len(normals), normals)
+            self._surface_faces.coordIndex.setValues(0, len(indices), indices)
+            self._surface_mesh = mesh
+            view.SurfacePreviewStatus = (
+                f"Closed candidate; cells {mesh['cells']}; untrimmed-field distance bound "
+                f"{mesh['field_distance_bound']:.6g} mm; coverage/embeddedness/solid NOT validated")
+        except Exception as error:
+            # Numerical preview failure must not invalidate authoritative math;
+            # no stale or partially uploaded surface is allowed to survive.
+            self._surface_faces.coordIndex.setNum(0)
+            self._surface_coordinates.point.setNum(0)
+            self._surface_normals.vector.setNum(0)
+            view.SurfacePreviewStatus = "Unsupported/failed surface preview: " + str(error)
+        return self._surface_mesh
 
     def doubleClicked(self, view):
         import FreeCADGui as Gui
@@ -306,6 +377,25 @@ class MixedBoundaryView(NativeBoundaryView):
         self._native_geometry = Implicit.nativeGeometry(obj) if obj.Geometry is not None else None
         caps = getattr(obj.Proxy, "_mesh", None)
         cap_data = caps["faces"] if caps else []
+        surface = self._update_surface(obj)
+        if surface is not None:
+            # Render caps from the SAME constrained mesh as the surface, not
+            # the older independent chordal tessellation which may skip knots.
+            cap_data = []
+            boundary = obj.Proxy._boundary
+            for index, cap in enumerate(boundary["planar_caps"]):
+                triangles = [tuple(t[:3]) for t in surface["cap_triangles"] if t[3] == index]
+                ids = sorted({i for t in triangles for i in t})
+                local = {node: i for i, node in enumerate(ids)}
+                cap_data.append({"vertices": [surface["vertices"][i] for i in ids],
+                                 "normals": [tuple(cap.normalAt(0, 0))] * len(ids),
+                                 "triangles": [tuple(local[i] for i in t) for t in triangles]})
+            points = [p for cap in cap_data for p in cap["vertices"]]
+            normals = [n for cap in cap_data for n in cap["normals"]]
+            self._coordinates.point.setNum(0)
+            self._normals.vector.setNum(0)
+            self._coordinates.point.setValues(0, len(points), points)
+            self._normals.vector.setValues(0, len(normals), normals)
         seam_data = data["curves"] if data else []
         for nodes, root, count, kind in (
                 (self._cap_nodes, self._root, len(cap_data), coin.SoIndexedFaceSet),
@@ -333,6 +423,8 @@ class MixedBoundaryView(NativeBoundaryView):
 
     def getElementPicked(self, picked):
         tail = picked.getPath().getTail()
+        if self._surface_mesh is not None and tail == self._surface_faces:
+            return "NativeFace1"
         for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
             for index, node in enumerate(nodes, 1):
                 if tail == node:
@@ -345,6 +437,8 @@ class MixedBoundaryView(NativeBoundaryView):
             return False
         name = self._native_geometry.getElementName(name)
         target = None
+        if name == "NativeFace1" and self._surface_mesh is not None:
+            target = self._surface_faces
         for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
             if name.startswith(prefix):
                 suffix = name[len(prefix):]
@@ -413,7 +507,8 @@ class MixedBoundaryTaskPanel:
         layout.addRow("Seam tolerance", self.tolerance)
         layout.addRow("Maximum tracing cells", self.cells)
         note = QtWidgets.QLabel("Apply previews changes. Cancel restores the previous state. "
-            "Tolerance controls seams only; this is NOT a validated solid or a full-surface mesh.")
+            "Tolerance controls seams only; optional surface preview has separate settings. "
+            "This is NOT a validated solid or a certified whole-surface mesh.")
         note.setWordWrap(True)
         layout.addRow(note)
         self.status = QtWidgets.QLabel(obj.BackendStatus)

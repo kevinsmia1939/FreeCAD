@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Shared native cap/seam constraints, NOT an implicit surface mesh or solid."""
+"""Native constraints and trim-conforming candidate, NOT a validated solid."""
 from collections import defaultdict
 import math
 import traceback
@@ -8,11 +8,12 @@ import ImplicitMixed
 import ImplicitOCCT as native
 
 
-def check(data, mesh):
+def check(data, mesh, surface=False):
     vertices, triangles = mesh["vertices"], mesh["cap_triangles"]
     assert vertices and triangles and mesh["seams"] and mesh["wires"]
-    assert mesh["native_surface_meshed"] is False
+    assert mesh["native_surface_meshed"] is surface
     assert mesh["solid_validated"] is False
+    assert mesh["surface_coverage_verified"] is False
     assert mesh["seam_geometric_bound"] == data["seam_geometric_bound"]
     assert mesh["seam_bound_verified"] == data["seam_bound_verified"]
     assert all(len(p) == 3 and all(math.isfinite(x) for x in p) for p in vertices)
@@ -53,6 +54,20 @@ def check(data, mesh):
         else:
             assert len(signs) == 2 and sum(signs) == 0
     assert set(wire_uses) <= set(cap_uses)
+    if surface:
+        assert mesh["mesh_closed"] and mesh["implicit_triangles"]
+        assert 0 < mesh["field_distance_bound"] <= .1 and 8 <= mesh["cells"] <= 256
+        combined = defaultdict(list, {edge: list(signs) for edge, signs in cap_uses.items()})
+        for triangle in mesh["implicit_triangles"]:
+            assert len(set(triangle)) == 3
+            p, q, r = (App.Vector(*vertices[i]) for i in triangle)
+            center = (p + q + r) / 3
+            gradient = App.Vector(*native.gradient(data["implicit_face"], tuple(center)))
+            direction = 1 if data["operation"] == "common" else -1
+            assert direction * (q - p).cross(r - p).dot(gradient) > 0
+            for a, b in zip(triangle, (*triangle[1:], triangle[0])):
+                use(combined, a, b)
+        assert all(len(signs) == 2 and sum(signs) == 0 for signs in combined.values())
 
 
 def main():
@@ -70,6 +85,14 @@ def main():
             geometry = obj.Geometry
             mesh = native.prepare_mixed_mesh(handle)
             check(data, mesh)
+            surface = native.tessellate_mixed(handle)
+            print("native mesh candidate", open_contours, operation, surface["cells"],
+                  len(surface["vertices"]), len(surface["implicit_triangles"]),
+                  surface["field_distance_bound"])
+            check(data, surface, surface=True)
+            assert surface == native.tessellate_mixed(obj.Geometry)
+            assert surface["vertices"][:len(mesh["vertices"])] == mesh["vertices"]
+            assert surface["seams"] == mesh["seams"] and surface["wires"] == mesh["wires"]
             assert mesh == native.prepare_mixed_mesh(handle)
             assert native.dumps_mixed(handle) == record
             # Independent Part copies and native property remain untouched.
@@ -84,6 +107,20 @@ def main():
             prepared = native.prepare_mixed_mesh(loaded["boundary_handle"])
             check(loaded, prepared)
             assert prepared["seam_bound_verified"] is False
+            restored_surface = native.tessellate_mixed(loaded["boundary_handle"])
+            check(loaded, restored_surface, surface=True)
+            assert restored_surface["implicit_triangles"] == surface["implicit_triangles"]
+            for args, error in (
+                    ((None,), TypeError),
+                    ((handle, .1, 257), ValueError),
+                    ((handle, 1.e-6, 8), NotImplementedError),
+                    ((handle, .1, 128, 3), NotImplementedError)):
+                try:
+                    native.tessellate_mixed(*args)
+                except error:
+                    pass
+                else:
+                    raise AssertionError("invalid surface meshing accepted")
             for args, error in (
                     ((data["implicit_face"],), TypeError),
                     ((None,), TypeError),
@@ -99,11 +136,12 @@ def main():
                 else:
                     raise AssertionError("invalid mesh preparation accepted")
             assert native.dumps_mixed(handle) == record
-            retained.append((data, mesh, record))
+            retained.append((data, mesh, surface, record))
         App.closeDocument(doc.Name)
-    for data, mesh, record in retained:
+    for data, mesh, surface, record in retained:
         assert native.prepare_mixed_mesh(data["boundary_handle"]) == mesh
         assert native.dumps_mixed(data["boundary_handle"]) == record
+        assert native.tessellate_mixed(data["boundary_handle"]) == surface
     print("native implicit mixed mesh preparation smoke test passed")
 
 

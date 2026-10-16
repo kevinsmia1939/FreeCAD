@@ -712,12 +712,16 @@ PyObject* classifyMixed(PyObject* args)
     return result.release();
 }
 
+template<bool Surface>
 PyObject* prepareMixedMesh(PyObject* args)
 {
     PyObject* object;
     double deflection = .1;
-    int maximumNodes = 200000, maximumTriangles = 400000;
-    if (!PyArg_ParseTuple(args, "O|dii", &object, &deflection, &maximumNodes, &maximumTriangles)) {
+    int maximumNodes = 200000, maximumTriangles = 400000, maximumCells = 256;
+    const bool parsed = Surface
+        ? PyArg_ParseTuple(args, "O|diii", &object, &deflection, &maximumCells, &maximumNodes, &maximumTriangles)
+        : PyArg_ParseTuple(args, "O|dii", &object, &deflection, &maximumNodes, &maximumTriangles);
+    if (!parsed) {
         return nullptr;
     }
     if (!PyCapsule_IsValid(object, boundaryName)) {
@@ -727,11 +731,19 @@ PyObject* prepareMixedMesh(PyObject* args)
     const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
         PyCapsule_GetPointer(object, boundaryName)
     );
-    const auto mesh
-        = BRepMesh_ImplicitBoundary::Prepare(*boundary, deflection, maximumNodes, maximumTriangles);
+    const auto mesh = Surface
+        ? BRepMesh_ImplicitBoundary::Tessellate(
+              *boundary,
+              deflection,
+              maximumCells,
+              maximumNodes,
+              maximumTriangles
+          )
+        : BRepMesh_ImplicitBoundary::Prepare(*boundary, deflection, maximumNodes, maximumTriangles);
     Object result(PyDict_New()), vertices(PyList_New(mesh.Nodes.size()));
     Object triangles(PyList_New(mesh.CapTriangles.size()));
-    if (!result || !vertices || !triangles) {
+    Object implicitTriangles(PyList_New(mesh.ImplicitTriangles.size()));
+    if (!result || !vertices || !triangles || !implicitTriangles) {
         return nullptr;
     }
     for (size_t i = 0; i < mesh.Nodes.size(); ++i) {
@@ -748,6 +760,14 @@ PyObject* prepareMixedMesh(PyObject* args)
             return nullptr;
         }
         PyList_SET_ITEM(triangles.get(), i, triangle);
+    }
+    for (size_t i = 0; i < mesh.ImplicitTriangles.size(); ++i) {
+        const auto& t = mesh.ImplicitTriangles[i];
+        auto* triangle = Py_BuildValue("(iii)", t[0], t[1], t[2]);
+        if (!triangle) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(implicitTriangles.get(), i, triangle);
     }
     const auto indices = [](const std::vector<std::vector<int>>& paths) -> PyObject* {
         Object result(PyList_New(paths.size()));
@@ -772,11 +792,16 @@ PyObject* prepareMixedMesh(PyObject* args)
     };
     if (!set(result.get(), "vertices", vertices.release())
         || !set(result.get(), "cap_triangles", triangles.release())
+        || !set(result.get(), "implicit_triangles", implicitTriangles.release())
         || !set(result.get(), "seams", indices(mesh.Seams))
         || !set(result.get(), "wires", indices(mesh.Wires))
         || !set(result.get(), "seam_geometric_bound", PyFloat_FromDouble(mesh.SeamGeometricBound))
         || !set(result.get(), "seam_bound_verified", PyBool_FromLong(mesh.SeamBoundVerified))
         || !set(result.get(), "native_surface_meshed", PyBool_FromLong(mesh.NativeSurfaceMeshed))
+        || !set(result.get(), "mesh_closed", PyBool_FromLong(mesh.MeshClosed))
+        || !set(result.get(), "surface_coverage_verified", PyBool_FromLong(mesh.SurfaceCoverageVerified))
+        || !set(result.get(), "field_distance_bound", PyFloat_FromDouble(mesh.FieldDistanceBound))
+        || !set(result.get(), "cells", PyLong_FromLong(mesh.Cells))
         || !set(result.get(), "solid_validated", PyBool_FromLong(mesh.SolidValidated))) {
         return nullptr;
     }
@@ -784,8 +809,14 @@ PyObject* prepareMixedMesh(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"tessellate_mixed",
+     checked<prepareMixedMesh<true>>,
+     METH_VARARGS,
+     "tessellate_mixed(boundary_handle, tolerance=.1, maximum_cells=256, maximum_nodes=200000, "
+     "maximum_triangles=400000) -> trim-conforming closed mesh candidate. One-sided "
+     "triangle-to-untrimmed-field distance bound, NOT coverage, embeddedness or solid validation."},
     {"prepare_mixed_mesh",
-     checked<prepareMixedMesh>,
+     checked<prepareMixedMesh<false>>,
      METH_VARARGS,
      "prepare_mixed_mesh(boundary_handle, cap_deflection=.1, maximum_nodes=200000, "
      "maximum_triangles=400000) -> cap triangles/shared native seam constraints; "
