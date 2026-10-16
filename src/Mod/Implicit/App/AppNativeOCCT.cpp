@@ -1247,6 +1247,84 @@ PyObject* checkBoxTopology(PyObject* args)
     return result.release();
 }
 
+PyObject* checkMixedCapAttachment(PyObject* args)
+{
+    PyObject* object;
+    int resolution = 32, depth = 16;
+    unsigned long long cells = 4000000, tests = 2000000;
+    if (!PyArg_ParseTuple(args, "O|iiKK", &object, &resolution, &depth, &cells, &tests)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!cells || cells > 10000000 || !tests || tests > 10000000) {
+        throw Standard_DomainError("Invalid cap attachment budgets");
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto report = BRepClass3d_ImplicitBox::CheckCapAttachment(
+        *boundary,
+        resolution,
+        depth,
+        size_t(cells),
+        size_t(tests)
+    );
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:O,s:O,s:O,s:s,s:d,s:K,s:K,s:i,s:i,s:i}",
+        "cap_regions_attached",
+        report.Resolved ? Py_True : Py_False,
+        "stored_graph_correspondence_resolved",
+        report.StoredGraphResolved ? Py_True : Py_False,
+        "region_reference_resolved",
+        report.RegionReferenceResolved ? Py_True : Py_False,
+        "trim_wire_attachment_validated",
+        Py_False,
+        "topology_validated",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "native_shell_constructed",
+        Py_False,
+        "reason",
+        report.Reason.c_str(),
+        "required_clearance",
+        report.RequiredClearance,
+        "witness_tests",
+        static_cast<unsigned long long>(report.WitnessTests),
+        "segment_tests",
+        static_cast<unsigned long long>(report.SegmentTests),
+        "reference_cap_count",
+        report.ReferenceCapCount,
+        "reference_shell_count",
+        report.ReferenceShellCount,
+        "reference_region_count",
+        report.ReferenceRegionCount
+    ));
+    if (!result) {
+        return nullptr;
+    }
+    const auto integer = [](int value) {
+        return PyLong_FromLong(value);
+    };
+    if (!set(result.get(), "reference_caps", convertedList(report.ReferenceCaps, integer))
+        || !set(result.get(), "reference_shells", convertedList(report.ReferenceShells, integer))
+        || !set(result.get(), "reference_regions", convertedList(report.ReferenceRegions, integer))
+        || !set(
+            result.get(),
+            "witness_points",
+            convertedList(report.Witnesses, [](const gp_Pnt& p) { return xyz(p.XYZ()); })
+        )
+        || !set(result.get(), "boundary_clearance_bounds", convertedList(report.Clearances, [](double x) {
+                    return PyFloat_FromDouble(x);
+                }))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyObject* checkMixedCorrespondence(PyObject* args)
 {
     PyObject* object;
@@ -1305,6 +1383,13 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"check_mixed_cap_attachment",
+     checked<checkMixedCapAttachment>,
+     METH_VARARGS,
+     "check_mixed_cap_attachment(boundary_handle, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000, maximum_witness_tests=2000000) "
+     "-> cap-region bijection using common F/L retained points beyond retraced seam uncertainty. "
+     "Not trim-wire attachment or native-shell/solid validation."},
     {"check_box_region_topology",
      checked<checkBoxTopology<false, true>>,
      METH_VARARGS,
