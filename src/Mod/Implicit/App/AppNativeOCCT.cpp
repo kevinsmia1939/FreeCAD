@@ -924,7 +924,96 @@ PyObject* checkMixedCoverage(PyObject* args)
     return result.release();
 }
 
+template<bool Mixed>
+PyObject* checkBoxRegularity(PyObject* args)
+{
+    PyObject* object;
+    int depth = 14;
+    unsigned long long cells = 2000000;
+    if (!PyArg_ParseTuple(args, "O|iK", &object, &depth, &cells)) {
+        return nullptr;
+    }
+    if (!cells || cells > 10000000) {
+        throw Standard_DomainError("Invalid box regularity cell budget");
+    }
+    const TopoDS_Face* face;
+    if constexpr (Mixed) {
+        if (!PyCapsule_IsValid(object, boundaryName)) {
+            PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+            return nullptr;
+        }
+        face = &static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+                    PyCapsule_GetPointer(object, boundaryName)
+        )
+                    ->Faces.back();
+    }
+    else {
+        face = getFace(object);
+        if (!face) {
+            return nullptr;
+        }
+    }
+    const auto report = BRepClass3d_ImplicitBox::CheckRegularity(*face, depth, size_t(cells));
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:d,s:i}",
+        "field_box_regularity_resolved",
+        report.Resolved ? Py_True : Py_False,
+        "trim_correspondence_validated",
+        Py_False,
+        "topology_validated",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "hessian_bound",
+        report.HessianBound,
+        "unresolved_dimension",
+        report.UnresolvedDimension
+    ));
+    Object strata(PyList_New(4));
+    if (!result || !strata) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < 4; ++i) {
+        auto* item = Py_BuildValue(
+            "{s:i,s:O,s:K,s:K,s:K,s:d}",
+            "dimension",
+            int(i),
+            "complete",
+            report.Complete[i] ? Py_True : Py_False,
+            "visited",
+            static_cast<unsigned long long>(report.Visited[i]),
+            "excluded",
+            static_cast<unsigned long long>(report.Excluded[i]),
+            "regular_cells",
+            static_cast<unsigned long long>(report.RegularCells[i]),
+            "minimum_projected_gradient",
+            report.MinimumDerivative[i]
+        );
+        if (!item) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(strata.get(), i, item);
+    }
+    if (!set(result.get(), "strata", strata.release())
+        || !set(result.get(), "unresolved_minimum", xyz(report.UnresolvedMinimum.XYZ()))
+        || !set(result.get(), "unresolved_maximum", xyz(report.UnresolvedMaximum.XYZ()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyMethodDef methods[] = {
+    {"check_mixed_regularity",
+     checked<checkBoxRegularity<true>>,
+     METH_VARARGS,
+     "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
+     "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
+     "NOT stored trim correspondence or solid validation."},
+    {"check_box_regularity",
+     checked<checkBoxRegularity<false>>,
+     METH_VARARGS,
+     "check_box_regularity(native_gyroid_face, maximum_depth=14, maximum_cells=2000000) -> "
+     "regularity in its BOX DOMAIN (stored trim wires ignored). Identity placement only."},
     {"check_mixed_coverage",
      checked<checkMixedCoverage>,
      METH_VARARGS,
