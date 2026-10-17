@@ -10,6 +10,16 @@ import Implicit
 
 
 def main():
+    # Conversion errors must stay inside Part.Shape's Python exception boundary.
+    for invalid in (object(),42,[Part.makeBox(1,1,1),object()]):
+        try:
+            Part.Shape(invalid)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("invalid conventional shape conversion accepted")
+    assert Part.Shape().isNull()
+    assert math.isclose(Part.Shape(Part.makeBox(1,2,3)).Volume,6)
     doc = App.newDocument("PartLinkedFields")
     box = doc.addObject("Part::Box", "Box")
     box.Length, box.Width, box.Height = 4, 6, 8

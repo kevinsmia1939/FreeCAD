@@ -31,6 +31,15 @@ namespace
 {
 constexpr const char* faceName = "ImplicitOCCT.NativeFace.v1";
 constexpr const char* boundaryName = "ImplicitOCCT.HybridBoundary.v1";
+constexpr const char* shellsName = "ImplicitOCCT.NativeShells.v1";
+void destroyShells(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, shellsName)) {
+        delete static_cast<BRepClass3d_ImplicitBox::NativeShells*>(
+            PyCapsule_GetPointer(capsule, shellsName)
+        );
+    }
+}
 void destroyBoundary(PyObject* capsule)
 {
     if (PyCapsule_IsValid(capsule, boundaryName)) {
@@ -645,6 +654,7 @@ PyObject* loadMixed(PyObject* args)
     return boundaryResult(boundary);
 }
 
+template<bool ShellContext = false>
 PyObject* classifyMixed(PyObject* args)
 {
     PyObject *object, *coordinate;
@@ -653,17 +663,25 @@ PyObject* classifyMixed(PyObject* args)
     if (!PyArg_ParseTuple(args, "OO|d", &object, &coordinate, &tolerance)) {
         return nullptr;
     }
-    if (!PyCapsule_IsValid(object, boundaryName)) {
-        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
-        return nullptr;
+    using Ops = BRepClass3d_ImplicitBox;
+    const Ops::Boundary* boundary;
+    if constexpr (ShellContext) {
+        if (!PyCapsule_IsValid(object, shellsName)) {
+            PyErr_SetString(PyExc_TypeError, "expected an immutable native shell snapshot");
+            return nullptr;
+        }
+        boundary = &static_cast<const Ops::NativeShells*>(PyCapsule_GetPointer(object, shellsName))->Source;
+    }
+    else {
+        if (!PyCapsule_IsValid(object, boundaryName)) {
+            PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+            return nullptr;
+        }
+        boundary = static_cast<const Ops::Boundary*>(PyCapsule_GetPointer(object, boundaryName));
     }
     if (!point(coordinate, p)) {
         return nullptr;
     }
-    using Ops = BRepClass3d_ImplicitBox;
-    const auto* boundary = static_cast<const Ops::Boundary*>(
-        PyCapsule_GetPointer(object, boundaryName)
-    );
     const auto query = Ops::Classify(*boundary, p, tolerance);
     const char* state = "unresolved";
     switch (query.State) {
@@ -1017,6 +1035,153 @@ PyObject* convertedList(const Range& values, Convert convert)
         PyList_SET_ITEM(result.get(), i, value);
     }
     return result.release();
+}
+
+PyObject* nativeShellReport(const BRepClass3d_ImplicitBox::NativeShells& data)
+{
+    int regions = 0;
+    int implicit = 0;
+    for (const auto& face : data.Faces) {
+        implicit += BRep_Tool::IsImplicit(face);
+    }
+    for (int region : data.ShellRegions) {
+        regions = std::max(regions, region + 1);
+    }
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:O,s:O,s:O,s:s,s:i,s:i,s:i,s:i,s:i,s:K}",
+        "face_attachment_validated",
+        data.FacesAttached ? Py_True : Py_False,
+        "native_shell_constructed",
+        data.ShellsConstructed ? Py_True : Py_False,
+        "topology_validated",
+        data.TopologyValidated ? Py_True : Py_False,
+        "solid_validated",
+        Py_False,
+        "geometry_accuracy_verified",
+        Py_False,
+        "part_compatible",
+        Py_False,
+        "generic_brep_check_performed",
+        Py_False,
+        "reason",
+        data.Reason.c_str(),
+        "shell_count",
+        int(data.Shells.size()),
+        "face_count",
+        int(data.Faces.size()),
+        "implicit_face_count",
+        implicit,
+        "region_count",
+        regions,
+        "separator_count",
+        data.Separators,
+        "separator_cells",
+        static_cast<unsigned long long>(data.SeparatorCells)
+    ));
+    if (!result) {
+        return nullptr;
+    }
+    const auto integer = [](int value) {
+        return PyLong_FromLong(value);
+    };
+    if (!set(result.get(), "face_sources", convertedList(data.FaceSources, integer))
+        || !set(result.get(), "face_components", convertedList(data.FaceComponents, integer))
+        || !set(result.get(), "face_shells", convertedList(data.FaceShells, integer))
+        || !set(result.get(), "shell_regions", convertedList(data.ShellRegions, integer))
+        || !set(result.get(), "shell_euler", convertedList(data.ShellEuler, integer))
+        || !set(result.get(), "component_domains", convertedList(data.ComponentDomains, [](const auto& box) {
+                    return Py_BuildValue(
+                        "((ddd)(ddd))",
+                        box[0].X(),
+                        box[0].Y(),
+                        box[0].Z(),
+                        box[1].X(),
+                        box[1].Y(),
+                        box[1].Z()
+                    );
+                }))) {
+        return nullptr;
+    }
+    if (data.ShellsConstructed) {
+        Object faces(PyList_New(0));
+        if (!faces) {
+            return nullptr;
+        }
+        for (size_t i = 0; i < data.Faces.size(); ++i) {
+            if (data.FaceComponents[i] < 0) {
+                continue;
+            }
+            Object face(ownFace(data.Faces[i]));
+            if (!face || PyList_Append(faces.get(), face.get()) < 0) {
+                return nullptr;
+            }
+        }
+        if (!set(result.get(), "implicit_faces", faces.release())) {
+            return nullptr;
+        }
+    }
+    return result.release();
+}
+
+PyObject* buildMixedShells(PyObject* args)
+{
+    PyObject* object;
+    int resolution = 32, depth = 16;
+    unsigned long long cells = 4000000, tests = 2000000, separators = 2000000;
+    if (!PyArg_ParseTuple(args, "O|iiKKK", &object, &resolution, &depth, &cells, &tests, &separators)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!cells || cells > 10000000 || !tests || tests > 10000000 || !separators
+        || separators > 10000000) {
+        throw Standard_DomainError("Invalid native shell build budgets");
+    }
+    const auto* source = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    auto data = std::make_unique<BRepClass3d_ImplicitBox::NativeShells>(
+        BRepClass3d_ImplicitBox::BuildNativeShells(
+            *source,
+            resolution,
+            depth,
+            size_t(cells),
+            size_t(tests),
+            size_t(separators)
+        )
+    );
+    Object result(nativeShellReport(*data));
+    if (!result) {
+        return nullptr;
+    }
+    if (data->ShellsConstructed) {
+        Object capsule(PyCapsule_New(data.get(), shellsName, destroyShells));
+        if (!capsule) {
+            return nullptr;
+        }
+        data.release();
+        if (!set(result.get(), "shell_handle", capsule.release())) {
+            return nullptr;
+        }
+    }
+    return result.release();
+}
+
+PyObject* inspectMixedShells(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, shellsName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native shell snapshot");
+        return nullptr;
+    }
+    return nativeShellReport(*static_cast<const BRepClass3d_ImplicitBox::NativeShells*>(
+        PyCapsule_GetPointer(object, shellsName)
+    ));
 }
 
 PyObject* regionTopologyReport(const BRepClass3d_ImplicitBox::RegionTopologyWitness& report)
@@ -1455,6 +1620,24 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"build_mixed_shells",
+     checked<buildMixedShells>,
+     METH_VARARGS,
+     "build_mixed_shells(boundary_handle, resolution=32, maximum_depth=16, maximum_cells=4000000, "
+     "maximum_tests=2000000, maximum_separator_cells=2000000) "
+     "-> owned genuine field-backed shells after whole-face/component attachment and native "
+     "topology checks. "
+     "NOT geometric/solid validation or a Part-compatible shape."},
+    {"inspect_mixed_shells",
+     checked<inspectMixedShells>,
+     METH_VARARGS,
+     "inspect_mixed_shells(shell_handle) -> immutable native shell snapshot diagnostics and owned "
+     "field-face handles."},
+    {"classify_mixed_shells",
+     checked<classifyMixed<true>>,
+     METH_VARARGS,
+     "classify_mixed_shells(shell_handle, point, tolerance=.1) -> authoritative source "
+     "mathematical-region classification, NOT solid validity."},
     {"check_mixed_trim_attachment",
      checked<checkMixedTrimAttachment>,
      METH_VARARGS,
@@ -1554,7 +1737,7 @@ PyMethodDef methods[] = {
      METH_VARARGS,
      "loads_mixed(record) -> native hybrid boundary; stored error bound is not re-certified"},
     {"classify_mixed",
-     checked<classifyMixed>,
+     checked<classifyMixed<false>>,
      METH_VARARGS,
      "classify_mixed(boundary_handle, point, distance_tolerance=.1) -> conservative region "
      "classification"},

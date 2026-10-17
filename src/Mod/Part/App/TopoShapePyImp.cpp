@@ -162,9 +162,9 @@ int TopoShapePy::PyInit(PyObject* args, PyObject* keywds)
     if (pyHasher) {
         self.Hasher = static_cast<App::StringHasherPy*>(pyHasher)->getStringHasherPtr();
     }
-    auto shapes = getPyShapes(pcObj);
     PY_TRY
     {
+        auto shapes = getPyShapes(pcObj);
         if (shapes.size() == 1 && !op) {
             auto s = shapes.front();
             if (self.Tag) {
