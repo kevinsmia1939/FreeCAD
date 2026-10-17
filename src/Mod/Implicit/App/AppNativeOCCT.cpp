@@ -1325,6 +1325,78 @@ PyObject* checkMixedCapAttachment(PyObject* args)
     return result.release();
 }
 
+PyObject* checkMixedTrimAttachment(PyObject* args)
+{
+    PyObject* object;
+    int resolution = 32, depth = 16;
+    unsigned long long cells = 4000000, tests = 2000000;
+    if (!PyArg_ParseTuple(args, "O|iiKK", &object, &resolution, &depth, &cells, &tests)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!cells || cells > 10000000 || !tests || tests > 10000000) {
+        throw Standard_DomainError("Invalid trim attachment budgets");
+    }
+    const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName)
+    );
+    const auto report = BRepClass3d_ImplicitBox::CheckTrimAttachment(
+        *boundary,
+        resolution,
+        depth,
+        size_t(cells),
+        size_t(tests)
+    );
+    Object result(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:O,s:O,s:O,s:s,s:i,s:i,s:i,s:K,s:K}",
+        "trim_wires_attached",
+        report.Resolved ? Py_True : Py_False,
+        "cap_regions_attached",
+        report.CapRegionsAttached ? Py_True : Py_False,
+        "complement_cap_regions_attached",
+        report.ComplementCapsAttached ? Py_True : Py_False,
+        "implicit_face_attachment_validated",
+        Py_False,
+        "topology_validated",
+        Py_False,
+        "native_shell_constructed",
+        Py_False,
+        "solid_validated",
+        Py_False,
+        "reason",
+        report.Reason.c_str(),
+        "reference_arc_count",
+        report.ReferenceArcCount,
+        "reference_wire_count",
+        report.ReferenceWireCount,
+        "reference_surface_component_count",
+        report.ReferenceSurfaceComponentCount,
+        "comparisons",
+        static_cast<unsigned long long>(report.Comparisons),
+        "curve_samples",
+        static_cast<unsigned long long>(report.CurveSamples)
+    ));
+    if (!result) {
+        return nullptr;
+    }
+    const auto integer = [](int value) {
+        return PyLong_FromLong(value);
+    };
+    if (!set(result.get(), "seam_reference_arcs", convertedList(report.SeamReferenceArcs, integer))
+        || !set(result.get(), "wire_reference_loops", convertedList(report.WireReferenceLoops, integer))
+        || !set(
+            result.get(),
+            "wire_surface_components",
+            convertedList(report.WireSurfaceComponents, integer)
+        )) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyObject* checkMixedCorrespondence(PyObject* args)
 {
     PyObject* object;
@@ -1383,6 +1455,13 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"check_mixed_trim_attachment",
+     checked<checkMixedTrimAttachment>,
+     METH_VARARGS,
+     "check_mixed_trim_attachment(boundary_handle, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000, maximum_tests=2000000) "
+     "-> dual cap/root contour identities and complete directed trim-wire correspondence. "
+     "Not whole implicit-face attachment or native-shell/solid validity."},
     {"check_mixed_cap_attachment",
      checked<checkMixedCapAttachment>,
      METH_VARARGS,
