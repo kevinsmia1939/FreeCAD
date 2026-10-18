@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Default gyroid native trim graph; deliberately not a qualified solid/FCStd owner."""
+"""Default gyroid native trim graph and policy-aware I/O, not a qualified solid."""
 import os
 import traceback
 import FreeCAD as App
@@ -37,14 +37,17 @@ def main():
         inspected = native.inspect_mixed(handle)
         assert inspected["edge_vertices"] == result["edge_vertices"]
         assert inspected["excluded_corner_contacts"] == [excluded]
-        rejected(lambda: native.dumps_mixed(handle))
+        restored = native.loads_mixed(native.dumps_mixed(handle))
+        assert restored["corner_policy"] == "regularized"
+        assert restored["excluded_corner_contacts"] == [excluded]
+        assert not restored["seam_bound_verified"]
         rejected(lambda: native.classify_mixed(handle, excluded))
         rejected(lambda: native.build_mixed_shells(handle))
         rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerPolicyGuard")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")
-        rejected(lambda: setattr(obj, "Geometry", handle))
-        assert obj.Geometry is None
+        obj.Geometry = handle
+        assert native.inspect_mixed(obj.Geometry)["corner_policy"] == "regularized"
         App.closeDocument(doc.Name)
         assert native.inspect_mixed(handle)["corner_policy"] == "regularized"
         rejected(lambda: native.mixed_box(face, box, operation))

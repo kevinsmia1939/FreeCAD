@@ -55,12 +55,14 @@ def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512,
     Planar caps are independent conventional Part faces. The opaque native face
     retains shared seam topology internally; do not sew caps into a fake solid.
     Resolved open/closed contours share certified box-edge roots; ambiguous
-    corner/tangent cases reject. Planar caps may contain multiple regions/holes.
+    corner/tangent cases reject by default. Explicit regularized corner policy
+    retains isolated-contact metadata in schema-2 topology/property persistence.
+    Planar caps may contain multiple regions/holes; this is not solid validation.
     """
     if not isinstance(box, Part.Shape):
         raise TypeError("box must be a conventional Part.Shape")
-    # Regularized corner boundaries are transient: existing persistence,
-    # classification and solid factories reject until they support that policy.
+    # Classification, mesh/reference and solid factories retain explicit guards
+    # until their whole-domain algorithms support the regularized corner policy.
     result = _mixed_box(field, box.exportBrepToString(), operation, tolerance, maximum_cells,
                         corner_policy)
     return _decode_caps(result, operation)
