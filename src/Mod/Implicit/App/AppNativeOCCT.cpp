@@ -667,6 +667,8 @@ PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
     if (!set(result.get(), "corner_policy", PyUnicode_FromString(
             boundary.Policy == Ops::CornerPolicy::Regularized ? "regularized" : "reject"))
         || !set(result.get(), "exact_corner_count", PyLong_FromLong(boundary.ExactCornerCount))
+        || !set(result.get(), "surface_domain_exclusion_count",
+                PyLong_FromSize_t(geometry->ExcludedDomains().size()))
         || !set(result.get(), "corner_contour_ends", PyLong_FromLong(boundary.CornerContourEnds))
         || !set(result.get(), "planar_corner_contacts", PyLong_FromLong(boundary.PlanarCornerContacts))
         || !set(result.get(), "excluded_corner_contacts", contacts.release())) {

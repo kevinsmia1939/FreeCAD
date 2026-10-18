@@ -10,6 +10,16 @@ import Part
 
 def check(handle):
     source = native.inspect_mixed(handle)
+    assert source["surface_domain_exclusion_count"] == 2
+    face = source["implicit_face"]
+    assert not native.in_domain(face, (0, 0, 0))
+    assert not native.in_domain(face, (10, 10, 10))
+    assert native.in_domain(face, (10, 0, 0))
+    assert native.in_domain(face, (5, 5, 5))
+    placed = native.translated(face, (2, 3, 4))
+    assert not native.in_domain(placed, (2, 3, 4))
+    assert not native.in_domain(placed, (12, 13, 14))
+    assert native.in_domain(placed, (12, 3, 4))
     report = native.check_mixed_trim_attachment(handle)
     assert report["trim_wires_attached"], report
     assert report["cap_regions_attached"] and report["complement_cap_regions_attached"]
