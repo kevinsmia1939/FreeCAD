@@ -32,6 +32,15 @@ namespace
 constexpr const char* faceName = "ImplicitOCCT.NativeFace.v1";
 constexpr const char* boundaryName = "ImplicitOCCT.HybridBoundary.v1";
 constexpr const char* shellsName = "ImplicitOCCT.NativeShells.v1";
+constexpr const char* solidsName = "ImplicitOCCT.NativeSolids.v1";
+
+void destroySolids(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, solidsName)) {
+        delete static_cast<BRepClass3d_ImplicitBox::NativeSolids*>(
+            PyCapsule_GetPointer(capsule, solidsName));
+    }
+}
 void destroyShells(PyObject* capsule)
 {
     if (PyCapsule_IsValid(capsule, shellsName)) {
@@ -654,7 +663,7 @@ PyObject* loadMixed(PyObject* args)
     return boundaryResult(boundary);
 }
 
-template<bool ShellContext = false>
+template<int Context = 0>
 PyObject* classifyMixed(PyObject* args)
 {
     PyObject *object, *coordinate;
@@ -665,7 +674,17 @@ PyObject* classifyMixed(PyObject* args)
     }
     using Ops = BRepClass3d_ImplicitBox;
     const Ops::Boundary* boundary;
-    if constexpr (ShellContext) {
+    bool validated = false;
+    if constexpr (Context == 2) {
+        if (!PyCapsule_IsValid(object, solidsName)) {
+            PyErr_SetString(PyExc_TypeError, "expected an immutable native solid snapshot");
+            return nullptr;
+        }
+        const auto* solids = static_cast<const Ops::NativeSolids*>(PyCapsule_GetPointer(object, solidsName));
+        boundary = &solids->Boundary.Source;
+        validated = solids->Validated;
+    }
+    else if constexpr (Context == 1) {
         if (!PyCapsule_IsValid(object, shellsName)) {
             PyErr_SetString(PyExc_TypeError, "expected an immutable native shell snapshot");
             return nullptr;
@@ -708,7 +727,7 @@ PyObject* classifyMixed(PyObject* args)
         "has_boundary_witness",
         query.HasBoundaryWitness ? Py_True : Py_False,
         "solid_validated",
-        Py_False
+        validated ? Py_True : Py_False
     ));
     if (!result) {
         return nullptr;
@@ -1184,6 +1203,100 @@ PyObject* inspectMixedShells(PyObject* args)
     ));
 }
 
+PyObject* nativeSolidReport(const BRepClass3d_ImplicitBox::NativeSolids& data)
+{
+    Object result(nativeShellReport(data.Boundary));
+    if (!result) {
+        return nullptr;
+    }
+    const auto& geometry = data.Geometry;
+    Object report(Py_BuildValue(
+        "{s:O,s:s,s:d,s:d,s:d,s:d,s:(KK),s:K,s:i,s:i}",
+        "resolved", geometry.Resolved ? Py_True : Py_False,
+        "reason", geometry.Reason.c_str(),
+        "mathematical_to_caps_bound", geometry.MathematicalToCapsBound,
+        "caps_to_mathematical_bound", geometry.CapsToMathematicalBound,
+        "edge_vertex_deviation", geometry.EdgeVertexDeviation,
+        "boundary_bound", geometry.BoundaryBound,
+        "cells", static_cast<unsigned long long>(geometry.Cells[0]),
+        static_cast<unsigned long long>(geometry.Cells[1]),
+        "segment_tests", static_cast<unsigned long long>(geometry.SegmentTests),
+        "unresolved_side", geometry.UnresolvedSide,
+        "unresolved_direction", geometry.UnresolvedDirection));
+    if (!report
+        || !set(report.get(), "unresolved_minimum", xyz(geometry.UnresolvedMinimum.XYZ()))
+        || !set(report.get(), "unresolved_maximum", xyz(geometry.UnresolvedMaximum.XYZ()))
+        || !set(result.get(), "geometry", report.release())
+        || !set(result.get(), "reason", PyUnicode_FromString(data.Reason.c_str()))
+        || !set(result.get(), "native_solid_constructed", PyBool_FromLong(data.Constructed))
+        || !set(result.get(), "solid_validated", PyBool_FromLong(data.Validated))
+        || !set(result.get(), "geometry_accuracy_verified", PyBool_FromLong(data.Geometry.Resolved))
+        || !set(result.get(), "solid_count", PyLong_FromSize_t(data.Solids.size()))
+        || !set(result.get(), "tolerance", PyFloat_FromDouble(data.Tolerance))
+        || !set(result.get(), "maximum_stored_tolerance", PyFloat_FromDouble(data.MaximumStoredTolerance))
+        || !set(result.get(), "validation_policy", PyUnicode_FromString(
+            "restricted implicit-aware numerical topology and whole-boundary tolerance; not directed intervals"))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+PyObject* buildMixedSolids(PyObject* args)
+{
+    PyObject* object;
+    double tolerance = .1;
+    int resolution = 32, depth = 16;
+    unsigned long long cells = 4000000, tests = 2000000, separators = 2000000,
+                       geometryCells = 2000000, segments = 8000000;
+    if (!PyArg_ParseTuple(args, "O|diiKKKKK", &object, &tolerance, &resolution, &depth,
+                          &cells, &tests, &separators, &geometryCells, &segments)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!cells || cells > 10000000 || !tests || tests > 10000000
+        || !separators || separators > 10000000 || !geometryCells || geometryCells > 10000000
+        || !segments || segments > 50000000) {
+        throw Standard_DomainError("Invalid native solid build budgets");
+    }
+    const auto* source = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName));
+    auto data = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>(
+        BRepClass3d_ImplicitBox::BuildNativeSolids(*source, tolerance, resolution, depth,
+            size_t(cells), size_t(tests), size_t(separators), size_t(geometryCells), size_t(segments)));
+    Object result(nativeSolidReport(*data));
+    if (!result) {
+        return nullptr;
+    }
+    if (data->Constructed && data->Validated) {
+        Object capsule(PyCapsule_New(data.get(), solidsName, destroySolids));
+        if (!capsule) {
+            return nullptr;
+        }
+        data.release();
+        if (!set(result.get(), "solid_handle", capsule.release())) {
+            return nullptr;
+        }
+    }
+    return result.release();
+}
+
+PyObject* inspectMixedSolids(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, solidsName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native solid snapshot");
+        return nullptr;
+    }
+    return nativeSolidReport(*static_cast<const BRepClass3d_ImplicitBox::NativeSolids*>(
+        PyCapsule_GetPointer(object, solidsName)));
+}
+
 PyObject* regionTopologyReport(const BRepClass3d_ImplicitBox::RegionTopologyWitness& report)
 {
     Object result(Py_BuildValue(
@@ -1620,6 +1733,16 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"build_mixed_solids", checked<buildMixedSolids>, METH_VARARGS,
+     "build_mixed_solids(boundary_handle, tolerance=.1, resolution=32, maximum_depth=16, "
+     "maximum_cells=4000000, maximum_tests=2000000, maximum_separator_cells=2000000, "
+     "maximum_geometry_cells=2000000, maximum_segment_tests=8000000) -> restricted native "
+     "solids gated by numerical topology and whole-boundary geometry checks; NOT Part shapes."},
+    {"inspect_mixed_solids", checked<inspectMixedSolids>, METH_VARARGS,
+     "inspect_mixed_solids(solid_handle) -> owned native solid diagnostics and field faces."},
+    {"classify_mixed_solids", checked<classifyMixed<2>>, METH_VARARGS,
+     "classify_mixed_solids(solid_handle, point, tolerance=.1) -> classification of the "
+     "authoritative material-region union, not per-solid selection or generic UV classification."},
     {"build_mixed_shells",
      checked<buildMixedShells>,
      METH_VARARGS,
