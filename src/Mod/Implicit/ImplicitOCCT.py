@@ -28,7 +28,9 @@ from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, i
                           check_box_region_topology, check_mixed_region_topology,
                           check_mixed_cap_attachment, check_mixed_trim_attachment,
                           build_mixed_shells, inspect_mixed_shells, classify_mixed_shells,
-                          build_mixed_solids, inspect_mixed_solids, classify_mixed_solids)
+                          build_mixed_solids, inspect_mixed_solids, classify_mixed_solids,
+                          dumps_mixed_solids, loads_mixed_solids,
+                          source_mixed_solids as _source_mixed_solids)
 from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed, inspect_mixed as _inspect_mixed
 
 
@@ -70,3 +72,8 @@ def loads_mixed(record):
 def inspect_mixed(handle):
     """Inspect an immutable native/property snapshot without numerical rebuilding."""
     return _decode_caps(_inspect_mixed(handle))
+
+
+def source_mixed_solids(handle):
+    """Owned source-boundary snapshot, explicitly not the stored result solids."""
+    return _decode_caps(_source_mixed_solids(handle))

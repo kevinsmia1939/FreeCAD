@@ -8,6 +8,7 @@
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
+#include <BRepClass3d_ImplicitSolidIO.hxx>
 #include <BRepMesh_ImplicitBoundary.hxx>
 #include <BRep_TImplicitFace.hxx>
 #include <BRepTools.hxx>
@@ -1390,6 +1391,71 @@ PyObject* inspectMixedSolids(PyObject* args)
         PyCapsule_GetPointer(object, solidsName)));
 }
 
+PyObject* dumpsMixedSolids(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, solidsName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native solid snapshot");
+        return nullptr;
+    }
+    std::ostringstream output;
+    BRepClass3d_ImplicitSolidIO::Write(
+        *static_cast<const BRepClass3d_ImplicitBox::NativeSolids*>(PyCapsule_GetPointer(object, solidsName)),
+        output);
+    const auto record = output.str();
+    return PyUnicode_FromStringAndSize(record.data(), Py_ssize_t(record.size()));
+}
+
+PyObject* loadsMixedSolids(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "U", &object)) {
+        return nullptr;
+    }
+    Py_ssize_t size;
+    const char* text = PyUnicode_AsUTF8AndSize(object, &size);
+    if (!text) {
+        return nullptr;
+    }
+    if (size > 32 * 1024 * 1024) {
+        throw Standard_DomainError("Native solid record exceeds 32 MiB");
+    }
+    std::istringstream input(std::string(text, size_t(size)));
+    auto data = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>();
+    BRepClass3d_ImplicitSolidIO::Read(input, *data);
+    Object result(nativeSolidReport(*data));
+    if (!result) {
+        return nullptr;
+    }
+    Object capsule(PyCapsule_New(data.get(), solidsName, destroySolids));
+    if (!capsule) {
+        return nullptr;
+    }
+    data.release();
+    if (!set(result.get(), "solid_handle", capsule.release())) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+PyObject* sourceMixedSolids(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, solidsName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native solid snapshot");
+        return nullptr;
+    }
+    const auto& data = *static_cast<const BRepClass3d_ImplicitBox::NativeSolids*>(
+        PyCapsule_GetPointer(object, solidsName));
+    return boundaryResult(data.Boundary.Source);
+}
+
 PyObject* regionTopologyReport(const BRepClass3d_ImplicitBox::RegionTopologyWitness& report)
 {
     Object result(Py_BuildValue(
@@ -1826,6 +1892,14 @@ PyObject* checkMixedCorrespondence(PyObject* args)
 }
 
 PyMethodDef methods[] = {
+    {"dumps_mixed_solids", checked<dumpsMixedSolids>, METH_VARARGS,
+     "dumps_mixed_solids(solid_handle) -> explicit native solid topology record, not a recipe/mesh."},
+    {"loads_mixed_solids", checked<loadsMixedSolids>, METH_VARARGS,
+     "loads_mixed_solids(record) -> owned actual solid topology without retracing; validation "
+     "flags remain false. Does not make a Part shape or restore numerical certification."},
+    {"source_mixed_solids", checked<sourceMixedSolids>, METH_VARARGS,
+     "source_mixed_solids(solid_handle) -> owned authoritative SOURCE boundary, not the result "
+     "solids. Explicitly rebuild/recheck using this source; source flags are not proof."},
     {"build_mixed_solids", checked<buildMixedSolids>, METH_VARARGS,
      "build_mixed_solids(boundary_handle, tolerance=.1, resolution=32, maximum_depth=16, "
      "maximum_cells=4000000, maximum_tests=2000000, maximum_separator_cells=2000000, "
