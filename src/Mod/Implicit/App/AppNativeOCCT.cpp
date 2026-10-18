@@ -1987,7 +1987,10 @@ PyObject* checkMixedCapAttachment(PyObject* args)
     const auto integer = [](int value) {
         return PyLong_FromLong(value);
     };
-    if (!set(result.get(), "reference_caps", convertedList(report.ReferenceCaps, integer))
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            boundary->Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized ? "regularized" : "reject"))
+        || !set(result.get(), "reference_resolution", PyLong_FromLong(report.Reference.Surface.Resolution))
+        || !set(result.get(), "reference_caps", convertedList(report.ReferenceCaps, integer))
         || !set(result.get(), "reference_shells", convertedList(report.ReferenceShells, integer))
         || !set(result.get(), "reference_regions", convertedList(report.ReferenceRegions, integer))
         || !set(
@@ -2096,7 +2099,11 @@ PyObject* checkMixedCorrespondence(PyObject* args)
     const auto report
         = BRepClass3d_ImplicitBox::CheckCorrespondence(*boundary, cells, size_t(comparisons));
     return Py_BuildValue(
-        "{s:O,s:O,s:O,s:O,s:s,s:i,s:i,s:i,s:i,s:K,s:K,s:d,s:d,s:d,s:d,s:d}",
+        "{s:s,s:s,s:O,s:O,s:O,s:O,s:s,s:i,s:i,s:i,s:i,s:K,s:K,s:d,s:d,s:d,s:d,s:d}",
+        "corner_policy",
+        boundary->Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized ? "regularized" : "reject",
+        "regularity_policy",
+        boundary->Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized ? "fixed_corner_homotopy" : "strict_strata",
         "stored_graph_correspondence_resolved",
         report.Resolved ? Py_True : Py_False,
         "field_box_regularity_resolved",
