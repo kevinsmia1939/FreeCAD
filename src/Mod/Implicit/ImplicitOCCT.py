@@ -61,8 +61,8 @@ def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512,
     """
     if not isinstance(box, Part.Shape):
         raise TypeError("box must be a conventional Part.Shape")
-    # Classification, mesh/reference and solid factories retain explicit guards
-    # until their whole-domain algorithms support the regularized corner policy.
+    # Mesh/reference and solid factories retain explicit guards until their
+    # whole-domain algorithms support the regularized corner policy.
     result = _mixed_box(field, box.exportBrepToString(), operation, tolerance, maximum_cells,
                         corner_policy)
     return _decode_caps(result, operation)

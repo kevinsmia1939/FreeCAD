@@ -41,7 +41,9 @@ def main():
         assert restored["corner_policy"] == "regularized"
         assert restored["excluded_corner_contacts"] == [excluded]
         assert not restored["seam_bound_verified"]
-        rejected(lambda: native.classify_mixed(handle, excluded))
+        query = native.classify_mixed(handle, excluded)
+        assert query["state"] == "outside" and query["distance_lower_bound"] > .1
+        assert query["corner_policy"] == "regularized" and not query["solid_validated"]
         rejected(lambda: native.build_mixed_shells(handle))
         rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerPolicyGuard")

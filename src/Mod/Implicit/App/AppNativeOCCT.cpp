@@ -825,6 +825,10 @@ PyObject* classifyMixed(PyObject* args)
     if (!result) {
         return nullptr;
     }
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            boundary->Policy == Ops::CornerPolicy::Regularized ? "regularized" : "reject"))) {
+        return nullptr;
+    }
     if (query.HasBoundaryWitness) {
         if (
             !set(result.get(), "witness_first", xyz(query.WitnessFirst.XYZ()))
