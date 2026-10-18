@@ -7,11 +7,14 @@
 #include <Mod/Implicit/ImplicitGlobal.h>
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <memory>
+#include <iosfwd>
 
 namespace Implicit
 {
 using NativeBoundary = BRepClass3d_ImplicitBox::Boundary;
 using NativeBoundaryPtr = std::shared_ptr<const NativeBoundary>;
+using NativeSolid = BRepClass3d_ImplicitBox::NativeSolids;
+using NativeSolidPtr = std::shared_ptr<const NativeSolid>;
 struct NativeRegionQuery
 {
     BRepClass3d_ImplicitBox::PointClassification classification;
@@ -25,10 +28,15 @@ class ImplicitExport NativeGeometry: public Data::ComplexGeoData
 {
     TYPESYSTEM_HEADER_WITH_OVERRIDE();
     friend class PropertyNativeGeometry;
+    friend class PropertyNativeSolidGeometry;
 
 public:
     NativeBoundaryPtr boundary;
+    NativeSolidPtr solids;
+    bool solidKind = false;
     void setBoundary(NativeBoundaryPtr);
+    void setSolids(NativeSolidPtr);
+    const TopoDS_Shape& topology() const;
     virtual NativeRegionQuery classifyRegion(const Base::Vector3d&, double) const;
     std::vector<const char*> getElementTypes() const override;
     unsigned long countSubElements(const char*) const override;
@@ -88,8 +96,31 @@ public:
     void RestoreDocFile(Base::Reader&) override;
     unsigned int getMemSize() const override;
 
-private:
+protected:
     NativeGeometry data;
+    virtual const char* xmlTag() const { return "NativeGeometry"; }
+    virtual const char* fileSuffix() const { return ".nativegeo"; }
+    virtual void writeNative(std::ostream&) const;
+    virtual void readNative(std::istream&);
+    virtual std::unique_ptr<PropertyNativeGeometry> emptyProperty() const;
+};
+
+class ImplicitExport PropertyNativeSolidGeometry: public PropertyNativeGeometry
+{
+    TYPESYSTEM_HEADER_WITH_OVERRIDE();
+public:
+    PropertyNativeSolidGeometry();
+    void setValue(NativeSolidPtr);
+    PyObject* getPyObject() override;
+    void setPyObject(PyObject*) override;
+    App::Property* Copy() const override;
+    void Paste(const App::Property&) override;
+protected:
+    const char* xmlTag() const override { return "NativeSolidGeometry"; }
+    const char* fileSuffix() const override { return ".nativesolid"; }
+    void writeNative(std::ostream&) const override;
+    void readNative(std::istream&) override;
+    std::unique_ptr<PropertyNativeGeometry> emptyProperty() const override;
 };
 
 // Whole native boundary snapshot with pre-applied subobject-path placement.
@@ -143,14 +174,12 @@ private:
     Base::Matrix4D placement;
 };
 
-class ImplicitExport NativeFeature: public App::GeoFeature
+class ImplicitExport NativeFeatureBase: public App::GeoFeature
 {
-    PROPERTY_HEADER_WITH_OVERRIDE(Implicit::NativeFeature);
+    PROPERTY_HEADER_WITH_OVERRIDE(Implicit::NativeFeatureBase);
 
 public:
-    NativeFeature();
-    PropertyNativeGeometry Geometry;
-    const App::PropertyComplexGeoData* getPropertyOfGeometry() const override;
+    NativeFeatureBase() = default;
     const char* getViewProviderName() const override;
     App::DocumentObject* getSubObject(
         const char*,
@@ -166,5 +195,22 @@ protected:
 private:
     fastsignals::scoped_connection recomputedConnection;
 };
+class ImplicitExport NativeFeature: public NativeFeatureBase
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Implicit::NativeFeature);
+public:
+    NativeFeature();
+    PropertyNativeGeometry Geometry;
+    const App::PropertyComplexGeoData* getPropertyOfGeometry() const override;
+};
+class ImplicitExport NativeSolidFeature: public NativeFeatureBase
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Implicit::NativeSolidFeature);
+public:
+    NativeSolidFeature();
+    PropertyNativeSolidGeometry Geometry;
+    const App::PropertyComplexGeoData* getPropertyOfGeometry() const override;
+};
 using NativeFeaturePython = App::FeaturePythonT<NativeFeature>;
+using NativeSolidFeaturePython = App::FeaturePythonT<NativeSolidFeature>;
 }  // namespace Implicit

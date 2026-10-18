@@ -11,6 +11,7 @@
 #include <App/ComplexGeoDataPy.h>
 #include <App/PropertyStandard.h>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
+#include <BRepClass3d_ImplicitSolidIO.hxx>
 #include <BRep_TImplicitFace.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
@@ -27,14 +28,16 @@
 #include <cmath>
 #include <sstream>
 #include <limits>
+#include <algorithm>
 
 namespace
 {
 constexpr const char* capsuleName = "ImplicitOCCT.HybridBoundary.v1";
+constexpr const char* solidCapsuleName = "ImplicitOCCT.NativeSolids.v1";
 using ShapeMap = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
-void indexTopology(const Implicit::NativeBoundary& boundary, ShapeMap& edges, ShapeMap& vertices)
+void indexTopology(const TopoDS_Shape& shape, ShapeMap& edges, ShapeMap& vertices)
 {
-    TopExp::MapShapes(boundary.Shape, TopAbs_EDGE, edges);
+    TopExp::MapShapes(shape, TopAbs_EDGE, edges);
     // Face/wire orientation can alter recursive vertex visitation after I/O.
     // Edge order and forward curve endpoints are preserved by the native codec.
     for (const auto& edge : edges) {
@@ -45,6 +48,19 @@ void indexTopology(const Implicit::NativeBoundary& boundary, ShapeMap& edges, Sh
         }
         vertices.Add(first);
         vertices.Add(last);
+    }
+}
+void seamTopology(const Implicit::NativeGeometry& geometry, ShapeMap& edges)
+{
+    if (geometry.solids) {
+        for (const auto& face : geometry.solids->Boundary.Faces) {
+            if (BRep_Tool::IsImplicit(face)) {
+                TopExp::MapShapes(face, TopAbs_EDGE, edges);
+            }
+        }
+    }
+    else if (geometry.boundary) {
+        TopExp::MapShapes(geometry.boundary->Faces.back(), TopAbs_EDGE, edges);
     }
 }
 void placePoint(const Base::Matrix4D& matrix, Base::Vector3d& point)
@@ -142,6 +158,12 @@ void destroyBoundary(PyObject* capsule)
         delete static_cast<Implicit::NativeBoundary*>(PyCapsule_GetPointer(capsule, capsuleName));
     }
 }
+void destroySolid(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, solidCapsuleName)) {
+        delete static_cast<Implicit::NativeSolid*>(PyCapsule_GetPointer(capsule, solidCapsuleName));
+    }
+}
 void identityOnly(const Base::Matrix4D& matrix)
 {
     if (matrix != Base::Matrix4D()) {
@@ -170,21 +192,55 @@ void writeBoundary(const Implicit::NativeBoundary& value, std::ostream& output)
         throw Base::ValueError(error.what());
     }
 }
+Implicit::NativeSolidPtr readSolid(std::istream& input)
+{
+    auto value = std::make_shared<Implicit::NativeSolid>();
+    try {
+        BRepClass3d_ImplicitSolidIO::Read(input, *value);
+    }
+    catch (const Standard_Failure& error) {
+        throw Base::ValueError(error.what());
+    }
+    return value;
+}
+void writeSolid(const Implicit::NativeSolid& value, std::ostream& output)
+{
+    try {
+        BRepClass3d_ImplicitSolidIO::Write(value, output);
+    }
+    catch (const Standard_Failure& error) {
+        throw Base::ValueError(error.what());
+    }
+}
+Base::BoundBox3d fieldBounds(const TopoDS_Face& face)
+{
+    const auto data = occ::down_cast<BRep_TImplicitFace>(face.TShape());
+    const auto a = data->Minimum(), b = data->Maximum();
+    return Base::BoundBox3d(a.X(), a.Y(), a.Z(), b.X(), b.Y(), b.Z());
+}
 }  // namespace
 
 namespace Implicit
 {
 TYPESYSTEM_SOURCE(Implicit::NativeGeometry, Data::ComplexGeoData)
 TYPESYSTEM_SOURCE(Implicit::PropertyNativeGeometry, App::PropertyComplexGeoData)
+TYPESYSTEM_SOURCE(Implicit::PropertyNativeSolidGeometry, Implicit::PropertyNativeGeometry)
 TYPESYSTEM_SOURCE(Implicit::NativeElementGeometry, Implicit::NativeGeometry)
 TYPESYSTEM_SOURCE(Implicit::NativePlacedGeometry, Implicit::NativeGeometry)
-PROPERTY_SOURCE(Implicit::NativeFeature, App::GeoFeature)
+PROPERTY_SOURCE(Implicit::NativeFeatureBase, App::GeoFeature)
+PROPERTY_SOURCE(Implicit::NativeFeature, Implicit::NativeFeatureBase)
+PROPERTY_SOURCE(Implicit::NativeSolidFeature, Implicit::NativeFeatureBase)
 
 NativePlacedGeometry::NativePlacedGeometry(const NativeGeometry& source, const Base::Matrix4D& matrix)
     : placement(matrix)
 {
     requireRigid(matrix);
-    setBoundary(source.boundary);
+    if (source.solidKind) {
+        setSolids(source.solids);
+    }
+    else {
+        setBoundary(source.boundary);
+    }
 }
 NativeRegionQuery NativeGeometry::classifyRegion(const Base::Vector3d& point, double tolerance) const
 {
@@ -229,7 +285,7 @@ NativeRegionQuery NativePlacedGeometry::classifyRegion(const Base::Vector3d& poi
     placePoint(inverse, local);
     auto returned = local;
     placePoint(placement, returned);
-    const auto domain = NativeGeometry::getBoundBox();
+    const auto domain = fieldBounds(boundary->Faces.back());
     const double extent[3] = {
         std::max(std::abs(domain.MinX), std::abs(domain.MaxX)),
         std::max(std::abs(domain.MinY), std::abs(domain.MaxY)),
@@ -360,6 +416,8 @@ NativeElementGeometry::NativeElementGeometry(
     // not carry an unchanged millimetre tolerance through a scale/shear.
     requireRigid(matrix);
     boundary = source.boundary;
+    solids = source.solids;
+    solidKind = source.solidKind;
     element.reset(source.getSubElementByName(name));
     ensureElementMap();
     const auto identity = source.getElementName(name);
@@ -445,10 +503,10 @@ Base::BoundBox3d NativeElementGeometry::getBoundBox() const
     if (!element) {
         return bounds;
     }
-    if (checkedSegment(element.get(), boundary).shape.ShapeType() == TopAbs_FACE
-        && checkedSegment(element.get(), boundary).shape.IsSame(boundary->Faces.back())) {
+    const auto& shape = checkedSegment(element.get(), boundary).shape;
+    if (shape.ShapeType() == TopAbs_FACE && BRep_Tool::IsImplicit(TopoDS::Face(shape))) {
         // Trim lines alone need not enclose the implicit surface's extrema.
-        return placedBounds(NativeGeometry::getBoundBox(), placement);
+        return placedBounds(fieldBounds(TopoDS::Face(shape)), placement);
     }
     else {
         std::vector<Base::Vector3d> points;
@@ -456,6 +514,16 @@ Base::BoundBox3d NativeElementGeometry::getBoundBox() const
         getLines(points, lines, 0);
         for (const auto& point : points) {
             bounds.Add(point);
+        }
+        // A closed implicit component can have no wires at all. Whole shell/
+        // solid bounds must also include every field face's actual domain.
+        if (shape.ShapeType() == TopAbs_SHELL || shape.ShapeType() == TopAbs_SOLID) {
+            for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+                const auto face = TopoDS::Face(it.Current());
+                if (BRep_Tool::IsImplicit(face)) {
+                    bounds.Add(placedBounds(fieldBounds(face), placement));
+                }
+            }
         }
     }
     return bounds;
@@ -477,7 +545,7 @@ void NativeGeometry::setBoundary(NativeBoundaryPtr next)
                                 .toHex();
         const std::string prefix = "ImplicitV1_" + digest.toStdString() + ":";
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges, vertices;
-        indexTopology(*next, edges, vertices);
+        indexTopology(next->Shape, edges, vertices);
         for (const auto* type : {"NativeFace", "Cap", "Seam", "Edge", "Vertex"}) {
             const size_t count = std::strcmp(type, "NativeFace") == 0 ? 1
                 : std::strcmp(type, "Cap") == 0                       ? next->Faces.size() - 1
@@ -495,17 +563,72 @@ void NativeGeometry::setBoundary(NativeBoundaryPtr next)
         }
     }
     boundary = std::move(next);
+    solids.reset();
+    solidKind = false;
     resetElementMap(std::move(names));
+}
+
+void NativeGeometry::setSolids(NativeSolidPtr next)
+{
+    NativeGeometry candidate;
+    candidate.solidKind = true;
+    candidate.solids = std::move(next);
+    auto names = std::make_shared<Data::ElementMap>();
+    if (candidate.solids) {
+        candidate.boundary = NativeBoundaryPtr(candidate.solids, &candidate.solids->Boundary.Source);
+        std::ostringstream output;
+        writeSolid(*candidate.solids, output);
+        const auto bytes = output.str();
+        const auto digest = QCryptographicHash::hash(QByteArray(bytes.data(), qsizetype(bytes.size())),
+                                                    QCryptographicHash::Sha256).toHex();
+        const std::string prefix = "ImplicitSolidV1_" + digest.toStdString() + ":";
+        for (const auto* type : candidate.getElementTypes()) {
+            const auto count = candidate.countSubElements(type);
+            for (unsigned long index = 1; index <= count; ++index) {
+                const auto name = prefix + type + std::to_string(index);
+                names->setElementName(Data::IndexedName(type, int(index)), Data::MappedName(name.c_str()), 0);
+            }
+        }
+    }
+    boundary = std::move(candidate.boundary);
+    solids = std::move(candidate.solids);
+    solidKind = true;
+    resetElementMap(std::move(names));
+}
+const TopoDS_Shape& NativeGeometry::topology() const
+{
+    static const TopoDS_Shape empty;
+    return solids ? static_cast<const TopoDS_Shape&>(solids->Shape)
+                  : boundary ? static_cast<const TopoDS_Shape&>(boundary->Shape) : empty;
 }
 
 std::vector<const char*> NativeGeometry::getElementTypes() const
 {
+    if (solidKind) {
+        return {"Solid", "Shell", "Face", "NativeFace", "Cap", "Seam", "Edge", "Vertex"};
+    }
     return {"NativeFace", "Cap", "Seam", "Edge", "Vertex"};
 }
 unsigned long NativeGeometry::countSubElements(const char* type) const
 {
     if (!boundary) {
         return 0;
+    }
+    if (solids) {
+        if (std::strcmp(type, "Solid") == 0) {
+            return solids->Solids.size();
+        }
+        if (std::strcmp(type, "Shell") == 0) {
+            return solids->Boundary.Shells.size();
+        }
+        if (std::strcmp(type, "Face") == 0) {
+            return solids->Boundary.Faces.size();
+        }
+        if (std::strcmp(type, "NativeFace") == 0 || std::strcmp(type, "Cap") == 0) {
+            const bool implicit = std::strcmp(type, "NativeFace") == 0;
+            return std::count_if(solids->Boundary.Faces.begin(), solids->Boundary.Faces.end(),
+                [implicit](const auto& face) { return BRep_Tool::IsImplicit(face) == implicit; });
+        }
     }
     if (std::strcmp(type, "NativeFace") == 0) {
         return 1;
@@ -514,11 +637,13 @@ unsigned long NativeGeometry::countSubElements(const char* type) const
         return boundary->Faces.size() - 1;
     }
     if (std::strcmp(type, "Seam") == 0) {
-        return boundary->SeamCount;
+        ShapeMap seams;
+        seamTopology(*this, seams);
+        return seams.Size();
     }
     if (std::strcmp(type, "Edge") == 0 || std::strcmp(type, "Vertex") == 0) {
         ShapeMap edges, vertices;
-        indexTopology(*boundary, edges, vertices);
+        indexTopology(topology(), edges, vertices);
         return std::strcmp(type, "Edge") == 0 ? edges.Size() : vertices.Size();
     }
     return 0;
@@ -532,7 +657,26 @@ Data::Segment* NativeGeometry::getSubElement(const char* type, unsigned long ind
     auto result = std::make_unique<NativeSegment>();
     result->owner = boundary;
     result->name = std::string(type) + std::to_string(index);
-    if (std::strcmp(type, "NativeFace") == 0) {
+    if (solids && std::strcmp(type, "Solid") == 0) {
+        result->shape = solids->Solids.at(index - 1);
+    }
+    else if (solids && std::strcmp(type, "Shell") == 0) {
+        result->shape = solids->Boundary.Shells.at(index - 1);
+    }
+    else if (solids && std::strcmp(type, "Face") == 0) {
+        result->shape = solids->Boundary.Faces.at(index - 1);
+    }
+    else if (solids && (std::strcmp(type, "NativeFace") == 0 || std::strcmp(type, "Cap") == 0)) {
+        const bool implicit = std::strcmp(type, "NativeFace") == 0;
+        unsigned long current = 0;
+        for (const auto& face : solids->Boundary.Faces) {
+            if (BRep_Tool::IsImplicit(face) == implicit && ++current == index) {
+                result->shape = face;
+                break;
+            }
+        }
+    }
+    else if (std::strcmp(type, "NativeFace") == 0) {
         result->shape = boundary->Faces.back();
     }
     else if (std::strcmp(type, "Cap") == 0) {
@@ -540,16 +684,17 @@ Data::Segment* NativeGeometry::getSubElement(const char* type, unsigned long ind
     }
     else if (std::strcmp(type, "Vertex") == 0) {
         ShapeMap edges, vertices;
-        indexTopology(*boundary, edges, vertices);
+        indexTopology(topology(), edges, vertices);
         result->shape = vertices.FindKey(int(index));
     }
     else {
         NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> shapes;
-        const TopoDS_Shape* topology = &boundary->Shape;
         if (std::strcmp(type, "Seam") == 0) {
-            topology = &boundary->Faces.back();
+            seamTopology(*this, shapes);
         }
-        TopExp::MapShapes(*topology, TopAbs_EDGE, shapes);
+        else {
+            TopExp::MapShapes(topology(), TopAbs_EDGE, shapes);
+        }
         result->shape = shapes.FindKey(int(index));
     }
     return result.release();
@@ -616,9 +761,24 @@ Base::BoundBox3d NativeGeometry::getBoundBox() const
     if (!boundary) {
         return Base::BoundBox3d();
     }
-    const auto data = occ::down_cast<BRep_TImplicitFace>(boundary->Faces.back().TShape());
-    const auto a = data->Minimum(), b = data->Maximum();
-    return Base::BoundBox3d(a.X(), a.Y(), a.Z(), b.X(), b.Y(), b.Z());
+    if (solids) {
+        Base::BoundBox3d result;
+        for (const auto& face : solids->Boundary.Faces) {
+            if (BRep_Tool::IsImplicit(face)) {
+                result.Add(fieldBounds(face));
+            }
+            else {
+                std::vector<Base::Vector3d> points;
+                std::vector<Line> lines;
+                boundaryLines(face, points, lines);
+                for (const auto& p : points) {
+                    result.Add(p);
+                }
+            }
+        }
+        return result;
+    }
+    return fieldBounds(boundary->Faces.back());
 }
 void NativeGeometry::getFaces(std::vector<Base::Vector3d>&, std::vector<Facet>&, double, uint16_t) const
 {
@@ -647,7 +807,7 @@ void NativeGeometry::getLines(
     if (!boundary) {
         return;
     }
-    boundaryLines(boundary->Shape, points, lines);
+    boundaryLines(topology(), points, lines);
 }
 void NativeGeometry::Save(Base::Writer&) const
 {
@@ -664,10 +824,15 @@ unsigned int NativeGeometry::getMemSize() const
 }
 void PropertyNativeGeometry::setValue(NativeBoundaryPtr value)
 {
+    if (getTypeId() != PropertyNativeGeometry::getClassTypeId()) {
+        throw Base::TypeError("Use the representation-specific native solid setter");
+    }
     NativeGeometry next;
     next.setBoundary(std::move(value));  // Validate/map before property mutation.
     aboutToSetValue();
     data.boundary = std::move(next.boundary);
+    data.solids.reset();
+    data.solidKind = false;
     data.resetElementMap(next.elementMap());
     hasSetValue();
 }
@@ -742,6 +907,9 @@ App::Property* PropertyNativeGeometry::Copy() const
 }
 void PropertyNativeGeometry::Paste(const App::Property& from)
 {
+    if (from.getTypeId() != getTypeId()) {
+        throw Base::TypeError("Native geometry property types cannot be converted implicitly");
+    }
     setValue(dynamic_cast<const PropertyNativeGeometry&>(from).data.boundary);
 }
 unsigned int PropertyNativeGeometry::getMemSize() const
@@ -750,41 +918,42 @@ unsigned int PropertyNativeGeometry::getMemSize() const
 }
 void PropertyNativeGeometry::Save(Base::Writer& writer) const
 {
+    const auto tag = xmlTag();
     if (!data.boundary) {
-        writer.Stream() << writer.ind() << "<NativeGeometry schema=\"1\" empty=\"1\"/>\n";
+        writer.Stream() << writer.ind() << "<" << tag << " schema=\"1\" empty=\"1\"/>\n";
     }
     else if (writer.isForceXML()) {
-        writer.Stream() << writer.ind() << "<NativeGeometry schema=\"1\" inline=\"1\">\n";
-        writeBoundary(*data.boundary, writer.beginCharStream(Base::CharStreamFormat::Base64Encoded));
-        writer.endCharStream() << writer.ind() << "</NativeGeometry>\n";
+        writer.Stream() << writer.ind() << "<" << tag << " schema=\"1\" inline=\"1\">\n";
+        writeNative(writer.beginCharStream(Base::CharStreamFormat::Base64Encoded));
+        writer.endCharStream() << writer.ind() << "</" << tag << ">\n";
     }
     else {
-        writer.Stream() << writer.ind() << "<NativeGeometry schema=\"1\" file=\""
-                        << writer.addFile(getFileName(".nativegeo").c_str(), this) << "\"/>\n";
+        writer.Stream() << writer.ind() << "<" << tag << " schema=\"1\" file=\""
+                        << writer.addFile(getFileName(fileSuffix()).c_str(), this) << "\"/>\n";
     }
 }
 void PropertyNativeGeometry::Restore(Base::XMLReader& reader)
 {
-    reader.readElement("NativeGeometry");
+    reader.readElement(xmlTag());
     if (reader.getAttribute<int>("schema") != 1) {
         throw Base::ValueError("Unsupported native geometry property schema");
     }
     if (reader.getAttribute<int>("empty", 0)) {
-        setValue(nullptr);
+        setPyObject(Py_None);
         return;
     }
     if (reader.getAttribute<int>("inline", 0)) {
         auto& input = reader.beginCharStream(Base::CharStreamFormat::Base64Encoded);
-        NativeBoundaryPtr next;
+        auto pending = emptyProperty();
         try {
-            next = readBoundary(input);
+            pending->readNative(input);
         }
         catch (...) {
             reader.endCharStream();
             throw;
         }
         reader.endCharStream();
-        setValue(std::move(next));
+        Paste(*pending);
     }
     else {
         const auto file = reader.getAttribute<std::string>("file");
@@ -797,12 +966,99 @@ void PropertyNativeGeometry::Restore(Base::XMLReader& reader)
 void PropertyNativeGeometry::SaveDocFile(Base::Writer& writer) const
 {
     if (data.boundary) {
-        writeBoundary(*data.boundary, writer.Stream());
+        writeNative(writer.Stream());
     }
 }
 void PropertyNativeGeometry::RestoreDocFile(Base::Reader& reader)
 {
-    setValue(readBoundary(reader));
+    readNative(reader);
+}
+void PropertyNativeGeometry::writeNative(std::ostream& output) const
+{
+    writeBoundary(*data.boundary, output);
+}
+void PropertyNativeGeometry::readNative(std::istream& input)
+{
+    setValue(readBoundary(input));
+}
+std::unique_ptr<PropertyNativeGeometry> PropertyNativeGeometry::emptyProperty() const
+{
+    return std::make_unique<PropertyNativeGeometry>();
+}
+PropertyNativeSolidGeometry::PropertyNativeSolidGeometry()
+{
+    data.setSolids(nullptr);
+}
+void PropertyNativeSolidGeometry::setValue(NativeSolidPtr value)
+{
+    NativeGeometry next;
+    next.setSolids(std::move(value));
+    aboutToSetValue();
+    data.boundary = std::move(next.boundary);
+    data.solids = std::move(next.solids);
+    data.solidKind = true;
+    data.resetElementMap(next.elementMap());
+    hasSetValue();
+}
+PyObject* PropertyNativeSolidGeometry::getPyObject()
+{
+    if (!data.solids) {
+        Py_RETURN_NONE;
+    }
+    auto owned = std::make_unique<NativeSolid>(*data.solids);
+    auto* result = PyCapsule_New(owned.get(), solidCapsuleName, destroySolid);
+    if (result) {
+        owned.release();
+    }
+    return result;
+}
+void PropertyNativeSolidGeometry::setPyObject(PyObject* object)
+{
+    if (object == Py_None) {
+        setValue(NativeSolidPtr());
+        return;
+    }
+    if (PyCapsule_IsValid(object, solidCapsuleName)) {
+        setValue(std::make_shared<const NativeSolid>(
+            *static_cast<const NativeSolid*>(PyCapsule_GetPointer(object, solidCapsuleName))));
+        return;
+    }
+    if (PyUnicode_Check(object)) {
+        Py_ssize_t size;
+        const char* text = PyUnicode_AsUTF8AndSize(object, &size);
+        if (!text || size > 32 * 1024 * 1024) {
+            throw Base::ValueError("Invalid native solid UTF-8 record or record exceeds 32 MiB");
+        }
+        std::istringstream input(std::string(text, size_t(size)));
+        readNative(input);
+        return;
+    }
+    throw Base::TypeError("Expected native solid topology, its explicit record or None; not a source boundary/Part shape");
+}
+App::Property* PropertyNativeSolidGeometry::Copy() const
+{
+    auto* result = new PropertyNativeSolidGeometry;
+    result->data.setSolids(data.solids);
+    return result;
+}
+void PropertyNativeSolidGeometry::Paste(const App::Property& from)
+{
+    if (from.getTypeId() != getTypeId()) {
+        throw Base::TypeError("Native solid property types cannot be converted implicitly");
+    }
+    setValue(static_cast<const PropertyNativeSolidGeometry&>(from).data.solids);
+}
+void PropertyNativeSolidGeometry::writeNative(std::ostream& output) const
+{
+    writeSolid(*data.solids, output);
+}
+void PropertyNativeSolidGeometry::readNative(std::istream& input)
+{
+    setValue(readSolid(input));
+}
+std::unique_ptr<PropertyNativeGeometry> PropertyNativeSolidGeometry::emptyProperty() const
+{
+    return std::make_unique<PropertyNativeSolidGeometry>();
 }
 NativeFeature::NativeFeature()
 {
@@ -818,11 +1074,20 @@ const App::PropertyComplexGeoData* NativeFeature::getPropertyOfGeometry() const
 {
     return &Geometry;
 }
-const char* NativeFeature::getViewProviderName() const
+NativeSolidFeature::NativeSolidFeature()
+{
+    ADD_PROPERTY_TYPE(Geometry, (nullptr), "Native solid geometry", App::Prop_Output,
+                      "Authoritative native solid topology; not a Part shape or source boundary");
+}
+const App::PropertyComplexGeoData* NativeSolidFeature::getPropertyOfGeometry() const
+{
+    return &Geometry;
+}
+const char* NativeFeatureBase::getViewProviderName() const
 {
     return "Gui::ViewProviderGeometryPython";
 }
-App::DocumentObject* NativeFeature::getSubObject(
+App::DocumentObject* NativeFeatureBase::getSubObject(
     const char* name,
     PyObject** pyObject,
     Base::Matrix4D* matrix,
@@ -830,12 +1095,16 @@ App::DocumentObject* NativeFeature::getSubObject(
     int depth
 ) const
 {
+    const auto* property = dynamic_cast<const PropertyNativeGeometry*>(getPropertyOfGeometry());
+    if (!property) {
+        return App::GeoFeature::getSubObject(name, pyObject, matrix, transform, depth);
+    }
     if (!name || !*name) {
         Base::Matrix4D placed = matrix ? *matrix : Base::Matrix4D();
         auto* owner = App::GeoFeature::getSubObject(name, pyObject, &placed, transform, depth);
-        if (owner == this && pyObject && !*pyObject && !Geometry.isNull()) {
+        if (owner == this && pyObject && !*pyObject && !property->isNull()) {
             auto snapshot = std::make_unique<NativePlacedGeometry>(
-                *static_cast<const NativeGeometry*>(Geometry.getComplexData()),
+                *static_cast<const NativeGeometry*>(property->getComplexData()),
                 placed
             );
             *pyObject = new Data::ComplexGeoDataPy(snapshot.get());
@@ -849,7 +1118,7 @@ App::DocumentObject* NativeFeature::getSubObject(
     if (std::strchr(name, '.') && !Data::isMappedElement(name)) {
         return App::GeoFeature::getSubObject(name, pyObject, matrix, transform, depth);
     }
-    const auto* geometry = Geometry.getComplexData();
+    const auto* geometry = property->getComplexData();
     try {
         std::unique_ptr<Data::Segment> segment(geometry->getSubElementByName(name));
     }
@@ -872,9 +1141,9 @@ App::DocumentObject* NativeFeature::getSubObject(
     if (matrix) {
         *matrix = placed;
     }
-    return const_cast<NativeFeature*>(this);
+    return const_cast<NativeFeatureBase*>(this);
 }
-void NativeFeature::onSettingDocument()
+void NativeFeatureBase::onSettingDocument()
 {
     App::GeoFeature::onSettingDocument();
     recomputedConnection.disconnect();
@@ -891,8 +1160,10 @@ void NativeFeature::onSettingDocument()
                     // Source errors can skip Python execution entirely. Clear
                     // the C++ geometry too, so no valid-looking stale body or
                     // proxy/view cache survives that skipped recompute.
-                    if (!Geometry.isNull()) {
-                        Geometry.setValue(nullptr);
+                    auto* property = const_cast<PropertyNativeGeometry*>(
+                        dynamic_cast<const PropertyNativeGeometry*>(getPropertyOfGeometry()));
+                    if (property && !property->isNull()) {
+                        property->setPyObject(Py_None);
                     }
                     setError();
                     if (auto* status
@@ -910,6 +1181,7 @@ void NativeFeature::onSettingDocument()
 namespace App
 {
 PROPERTY_SOURCE_TEMPLATE(Implicit::NativeFeaturePython, Implicit::NativeFeature)
+PROPERTY_SOURCE_TEMPLATE(Implicit::NativeSolidFeaturePython, Implicit::NativeSolidFeature)
 template<>
 PyObject* Implicit::NativeFeaturePython::getPyObject()
 {
@@ -919,4 +1191,13 @@ PyObject* Implicit::NativeFeaturePython::getPyObject()
     return Py::new_reference_to(PythonObject);
 }
 template class ImplicitExport FeaturePythonT<Implicit::NativeFeature>;
+template<>
+PyObject* Implicit::NativeSolidFeaturePython::getPyObject()
+{
+    if (PythonObject.is(Py::_None())) {
+        PythonObject = Py::Object(new FeaturePythonPyT<GeoFeaturePy>(this), true);
+    }
+    return Py::new_reference_to(PythonObject);
+}
+template class ImplicitExport FeaturePythonT<Implicit::NativeSolidFeature>;
 }  // namespace App

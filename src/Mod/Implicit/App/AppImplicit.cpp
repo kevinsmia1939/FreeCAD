@@ -237,7 +237,10 @@ private:
         data["placement_error_bound"] = Py::Float(result.placementErrorBound);
         data["placement_resolved"] = Py::Boolean(result.placementResolved);
         data["has_boundary_witness"] = Py::Boolean(query.HasBoundaryWitness);
-        data["solid_validated"] = Py::Boolean(false);
+        data["solid_validated"] = Py::Boolean(geometry->solids && geometry->solids->Validated);
+        if (geometry->solidKind) {
+            data["region_scope"] = Py::String("authoritative source union, not individual SolidN");
+        }
         if (query.HasBoundaryWitness) {
             data["witness_first"] = vectorToPython(
                 Base::Vector3d(query.WitnessFirst.X(), query.WitnessFirst.Y(), query.WitnessFirst.Z())
@@ -262,7 +265,13 @@ private:
             throw Py::TypeError("Expected a feature with native mixed geometry");
         }
         auto snapshot = std::make_unique<NativeGeometry>();
-        snapshot->setBoundary(static_cast<const NativeGeometry*>(property->getComplexData())->boundary);
+        const auto* source = static_cast<const NativeGeometry*>(property->getComplexData());
+        if (source->solidKind) {
+            snapshot->setSolids(source->solids);
+        }
+        else {
+            snapshot->setBoundary(source->boundary);
+        }
         auto* wrapper = new Data::ComplexGeoDataPy(snapshot.get());
         snapshot.release();  // ComplexGeoDataPy owns the reference-counted snapshot.
         return Py::Object(wrapper, true);
@@ -754,8 +763,12 @@ PyMOD_INIT_FUNC(Implicit)
     Implicit::NativeElementGeometry::init();
     Implicit::NativePlacedGeometry::init();
     Implicit::PropertyNativeGeometry::init();
+    Implicit::PropertyNativeSolidGeometry::init();
+    Implicit::NativeFeatureBase::init();
     Implicit::NativeFeature::init();
     Implicit::NativeFeaturePython::init();
+    Implicit::NativeSolidFeature::init();
+    Implicit::NativeSolidFeaturePython::init();
 #endif
     PyMOD_Return(module);
 }
