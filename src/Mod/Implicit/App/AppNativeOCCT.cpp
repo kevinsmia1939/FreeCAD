@@ -19,6 +19,7 @@
 #include <NCollection_IndexedMap.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <Standard_DomainError.hxx>
+#include <Standard_ConstructionError.hxx>
 #include <Standard_NotImplemented.hxx>
 #include <Standard_Version.hxx>
 #include <TopoDS.hxx>
@@ -1050,6 +1051,75 @@ PyObject* checkMixedCoverage(PyObject* args)
     ));
     if (!result || !set(result.get(), "unresolved_minimum", xyz(report.UnresolvedMinimum.XYZ()))
         || !set(result.get(), "unresolved_maximum", xyz(report.UnresolvedMaximum.XYZ()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+PyObject* traceGyroidPlane(PyObject* args)
+{
+    PyObject *object, *origin, *normal, *direction, *lattice = Py_False;
+    BRep_ImplicitPlaneSection::Settings settings;
+    gp_Pnt p, n, x;
+    if (!PyArg_ParseTuple(args, "OOOO(dd)(dd)|diO", &object, &origin, &normal, &direction,
+        &settings.UMinimum, &settings.UMaximum, &settings.VMinimum, &settings.VMaximum,
+        &settings.DistanceTolerance, &settings.MaximumCells, &lattice)
+        || !point(origin, p) || !point(normal, n) || !point(direction, x)) {
+        return nullptr;
+    }
+    if (!PyBool_Check(lattice)) {
+        PyErr_SetString(PyExc_TypeError, "allow_exact_lattice_nodes must be an explicit bool");
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    settings.AllowExactLatticeNodes = lattice == Py_True;
+    try {
+        settings.Frame = gp_Ax2(p, gp_Dir(gp_Vec(n.XYZ())), gp_Dir(gp_Vec(x.XYZ())));
+    }
+    catch (const Standard_ConstructionError&) {
+        throw Standard_DomainError("Section normal and X direction must define a finite nondegenerate plane frame");
+    }
+    const auto section = BRep_ImplicitPlaneSection::Trace(*face, settings);
+    Object result(Py_BuildValue("{s:O,s:i,s:i,s:i,s:i,s:i,s:d,s:d,s:d,s:i,s:O,s:O,s:O}",
+        "resolved", section.Resolved ? Py_True : Py_False,
+        "resolution", section.Resolution, "unresolved_cells", section.UnresolvedCells,
+        "potential_critical_cells", section.PotentialCriticalCells,
+        "ambiguous_cells", section.AmbiguousCells, "graph_defects", section.GraphDefects,
+        "geometric_bound", section.GeometricBound, "maximum_residual", section.MaximumResidual,
+        "maximum_root_bracket", section.MaximumRootBracket,
+        "exact_lattice_node_count", section.ExactLatticeNodeCount,
+        "allow_exact_lattice_nodes", settings.AllowExactLatticeNodes ? Py_True : Py_False,
+        "topology_validated", Py_False, "solid_validated", Py_False));
+    Object curves(PyList_New(0)), contacts(PyList_New(0));
+    if (!result || !curves || !contacts) {
+        return nullptr;
+    }
+    for (const auto& curve : section.Curves) {
+        Object points(PyList_New(0));
+        Object item(Py_BuildValue("{s:O}", "closed", curve.Closed ? Py_True : Py_False));
+        if (!points || !item) {
+            return nullptr;
+        }
+        for (const auto& p : curve.Points) {
+            Object value(xyz(p.XYZ()));
+            if (!value || PyList_Append(points.get(), value.get()) < 0) {
+                return nullptr;
+            }
+        }
+        if (!set(item.get(), "points", points.release()) || PyList_Append(curves.get(), item.get()) < 0) {
+            return nullptr;
+        }
+    }
+    for (const auto& p : section.PointContacts) {
+        Object value(xyz(p.XYZ()));
+        if (!value || PyList_Append(contacts.get(), value.get()) < 0) {
+            return nullptr;
+        }
+    }
+    if (!set(result.get(), "curves", curves.release()) || !set(result.get(), "point_contacts", contacts.release())) {
         return nullptr;
     }
     return result.release();
@@ -2097,6 +2167,9 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
+    {"trace_gyroid_plane", checked<traceGyroidPlane>, METH_VARARGS,
+     "Trace a bounded plane rectangle; polylines and isolated point contacts, not native trim B-Reps. "
+     "Exact lattice-node mode is explicit and requires identity field placement/coordinate planes."},
     {"check_box_corners", checked<checkBoxCorners>, METH_VARARGS,
      "check_box_corners(native_gyroid_face, maximum_radius=.1) -> local corner germs; "
      "NOT strict box regularity, trim topology or solid validation. Corner bits encode high XYZ."},

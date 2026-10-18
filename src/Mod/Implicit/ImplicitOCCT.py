@@ -33,6 +33,19 @@ from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, i
                           dumps_mixed_solids, loads_mixed_solids,
                           source_mixed_solids as _source_mixed_solids)
 from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed, inspect_mixed as _inspect_mixed
+from _ImplicitOCCT import trace_gyroid_plane as _trace_gyroid_plane
+
+
+def trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,
+                       distance_tolerance=.1, maximum_cells=512, allow_exact_lattice_nodes=False):
+    """Tolerance-bearing section curves PLUS explicit isolated point contacts.
+
+    Exact lattice-node mode is opt-in: contacts must not be discarded merely
+    because curves is empty. Unknown near-zeros remain unresolved. This returns
+    no native trim topology, solid or persisted proof flags.
+    """
+    return _trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,
+                               distance_tolerance, maximum_cells, allow_exact_lattice_nodes)
 
 
 def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
