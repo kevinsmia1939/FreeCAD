@@ -2066,7 +2066,13 @@ PyObject* checkMixedTrimAttachment(PyObject* args)
     const auto integer = [](int value) {
         return PyLong_FromLong(value);
     };
-    if (!set(result.get(), "seam_reference_arcs", convertedList(report.SeamReferenceArcs, integer))
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            boundary->Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized ? "regularized" : "reject"))
+        || !set(result.get(), "reference_resolution", PyLong_FromLong(report.RetainedCaps.Reference.Surface.Resolution))
+        || !set(result.get(), "surface_component_euler", convertedList(report.SurfaceComponentEuler, integer))
+        || !set(result.get(), "surface_component_shells", convertedList(report.SurfaceComponentShells, integer))
+        || !set(result.get(), "surface_component_regions", convertedList(report.SurfaceComponentRegions, integer))
+        || !set(result.get(), "seam_reference_arcs", convertedList(report.SeamReferenceArcs, integer))
         || !set(result.get(), "wire_reference_loops", convertedList(report.WireReferenceLoops, integer))
         || !set(
             result.get(),
