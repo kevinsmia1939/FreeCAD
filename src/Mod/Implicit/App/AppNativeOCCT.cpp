@@ -1768,25 +1768,29 @@ PyObject* regionTopologyReport(const BRepClass3d_ImplicitBox::RegionTopologyWitn
 template<bool Mixed, bool Region = false>
 PyObject* checkBoxTopology(PyObject* args)
 {
+    using Ops = BRepClass3d_ImplicitBox;
     PyObject* object;
     int resolution = 32, depth = 16;
     unsigned long long cells = 4000000;
-    if (!PyArg_ParseTuple(args, "O|iiK", &object, &resolution, &depth, &cells)) {
+    const char* cornerPolicy = "auto";
+    if (!PyArg_ParseTuple(args, "O|iiKs", &object, &resolution, &depth, &cells, &cornerPolicy)) {
         return nullptr;
     }
     if (!cells || cells > 10000000) {
         throw Standard_DomainError("Invalid box topology work budget");
     }
     const TopoDS_Face* face;
+    auto sourcePolicy = Ops::CornerPolicy::Reject;
     if constexpr (Mixed) {
         if (!PyCapsule_IsValid(object, boundaryName)) {
             PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
             return nullptr;
         }
-        face = &static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        const auto* boundary = static_cast<const Ops::Boundary*>(
                     PyCapsule_GetPointer(object, boundaryName)
-        )
-                    ->Faces.back();
+        );
+        face = &boundary->Faces.back();
+        sourcePolicy = boundary->Policy;
     }
     else {
         face = getFace(object);
@@ -1794,12 +1798,25 @@ PyObject* checkBoxTopology(PyObject* args)
             return nullptr;
         }
     }
+    const std::string policyName(cornerPolicy);
+    auto policy = sourcePolicy;
+    if (policyName == "reject") policy = Ops::CornerPolicy::Reject;
+    else if (policyName == "regularized") policy = Ops::CornerPolicy::Regularized;
+    else if (policyName != "auto") throw Standard_DomainError("Unknown topology corner policy");
+    if constexpr (Mixed) {
+        if (policy != sourcePolicy) {
+            throw Standard_DomainError("Topology query cannot override the source material policy");
+        }
+    }
     if constexpr (Region) {
+        if (policy != Ops::CornerPolicy::Reject) {
+            throw Standard_NotImplemented("Corner-aware closed region reference is not implemented");
+        }
         return regionTopologyReport(
             BRepClass3d_ImplicitBox::CheckRegionTopology(*face, resolution, depth, size_t(cells))
         );
     }
-    const auto report = BRepClass3d_ImplicitBox::CheckTopology(*face, resolution, depth, size_t(cells));
+    const auto report = Ops::CheckTopology(*face, resolution, depth, size_t(cells), policy);
     Object result(Py_BuildValue(
         "{s:O,s:O,s:O,s:O,s:O,s:O,s:s,s:d,s:d,s:i,s:i}",
         "whole_box_homotopy_resolved",
@@ -1886,7 +1903,14 @@ PyObject* checkBoxTopology(PyObject* args)
         }
         PyList_SET_ITEM(strata.get(), i, entry);
     }
-    if (!set(result.get(), "reference_vertices", vertices.release())
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            report.Policy == Ops::CornerPolicy::Regularized ? "regularized" : "reject"))
+        || !set(result.get(), "fixed_corner_count", PyLong_FromLong(report.FixedCornerCount))
+        || !set(result.get(), "point_contacts", convertedList(report.PointContacts,
+            [](const gp_Pnt& p) { return xyz(p.XYZ()); }))
+        || !set(result.get(), "reference_grid_edges", convertedList(report.GridEdges,
+            [](const auto& edge) { return Py_BuildValue("(ii)", edge[0], edge[1]); }))
+        || !set(result.get(), "reference_vertices", vertices.release())
         || !set(result.get(), "reference_triangles", triangles.release())
         || !set(result.get(), "reference_boundary_loops", loops.release())
         || !set(result.get(), "reference_component_euler", euler.release())
