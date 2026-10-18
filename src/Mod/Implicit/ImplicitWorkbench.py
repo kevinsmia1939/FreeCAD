@@ -18,6 +18,9 @@ class ImplicitModelingWorkbench(Gui.Workbench):
                                    "Implicit_OCCTMixedBoxMinusField") if name in commands]
         if native:
             self.appendMenu(["Implicit Modelling", "Native boundaries (experimental)"], native)
+        solids = [name for name in ("Implicit_NativeSolid", "Implicit_NativeSolidDemo") if name in commands]
+        if solids:
+            self.appendMenu(["Implicit Modelling", "Native solids (experimental)"], solids)
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

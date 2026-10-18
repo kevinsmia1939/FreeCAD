@@ -1303,6 +1303,34 @@ PyObject* nativeSolidReport(const BRepClass3d_ImplicitBox::NativeSolids& data)
     if (!result) {
         return nullptr;
     }
+    // Alias actual component seams to actual result edges by native identity,
+    // never by coordinate matching or the original source compound's order.
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> allEdges, seams;
+    Object seamEdges(PyList_New(0));
+    if (!seamEdges) {
+        return nullptr;
+    }
+    if (data.Constructed) {
+        TopExp::MapShapes(data.Shape, TopAbs_EDGE, allEdges);
+        for (const auto& face : data.Boundary.Faces) {
+            if (BRep_Tool::IsImplicit(face)) {
+                TopExp::MapShapes(face, TopAbs_EDGE, seams);
+            }
+        }
+        for (const auto& seam : seams) {
+            const int index = allEdges.FindIndex(seam);
+            if (!index) {
+                throw Standard_DomainError("Native solid seam is missing from actual result edges");
+            }
+            Object value(PyLong_FromLong(index - 1));
+            if (!value || PyList_Append(seamEdges.get(), value.get()) < 0) {
+                return nullptr;
+            }
+        }
+    }
+    if (!set(result.get(), "seam_edges", seamEdges.release())) {
+        return nullptr;
+    }
     const auto& geometry = data.Geometry;
     Object report(Py_BuildValue(
         "{s:O,s:s,s:d,s:d,s:d,s:d,s:(KK),s:K,s:i,s:i}",

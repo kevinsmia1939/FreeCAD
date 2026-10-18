@@ -315,6 +315,10 @@ def register():
         pass
     else:
         import ImplicitMixed
+        import ImplicitSolid
+        commands.append(("Implicit_NativeSolid", "Build live native solid from boundary (experimental)",
+                         ImplicitSolid.selected))
+        commands.append(("Implicit_NativeSolidDemo", "Live native solid demo (experimental)", ImplicitSolid.demo))
         commands.append(("Implicit_NativeTopologyDemo", "Native boundary selection demo (experimental)",
                          create_topology_demo))
         commands.append(("Implicit_OCCTInProcessSphere", "OCCT in-process sphere (experimental)",
