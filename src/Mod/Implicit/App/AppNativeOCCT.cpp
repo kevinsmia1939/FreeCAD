@@ -486,9 +486,10 @@ PyObject* mixedBox(PyObject* args)
 {
     PyObject *object, *record;
     const char* operation;
+    const char* cornerPolicy = "reject";
     double tolerance = .1;
     int maximumCells = 512;
-    if (!PyArg_ParseTuple(args, "OUs|di", &object, &record, &operation, &tolerance, &maximumCells)) {
+    if (!PyArg_ParseTuple(args, "OUs|dis", &object, &record, &operation, &tolerance, &maximumCells, &cornerPolicy)) {
         return nullptr;
     }
     const auto* face = getFace(object);
@@ -504,6 +505,10 @@ PyObject* mixedBox(PyObject* args)
         throw Standard_DomainError("conventional box snapshot exceeds 4 MiB");
     }
     using Ops = BRepClass3d_ImplicitBox;
+    const std::string policy(cornerPolicy);
+    if (policy != "reject" && policy != "regularized") {
+        throw Standard_DomainError("expected reject or regularized corner policy");
+    }
     const std::string name(operation);
     if (name != "common" && name != "box_minus_field") {
         throw Standard_DomainError("expected common or box_minus_field; operand order is explicit");
@@ -523,7 +528,8 @@ PyObject* mixedBox(PyObject* args)
         box,
         name == "common" ? Ops::Operation::Common : Ops::Operation::BoxMinusField,
         tolerance,
-        maximumCells
+        maximumCells,
+        policy == "regularized" ? Ops::CornerPolicy::Regularized : Ops::CornerPolicy::Reject
     );
     return boundaryResult(boundary);
 }
@@ -645,6 +651,25 @@ PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
         || !set(result.get(), "vertex_points", vertexPoints.release())
         || !set(result.get(), "edge_vertices", edgeVertices.release())
         || !set(result.get(), "seam_edges", seamEdges.release())) {
+        return nullptr;
+    }
+    Object contacts(PyList_New(boundary.ExcludedCornerContacts.size()));
+    if (!contacts) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < boundary.ExcludedCornerContacts.size(); ++i) {
+        auto* point = xyz(boundary.ExcludedCornerContacts[i].XYZ());
+        if (!point) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(contacts.get(), i, point);
+    }
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            boundary.Policy == Ops::CornerPolicy::Regularized ? "regularized" : "reject"))
+        || !set(result.get(), "exact_corner_count", PyLong_FromLong(boundary.ExactCornerCount))
+        || !set(result.get(), "corner_contour_ends", PyLong_FromLong(boundary.CornerContourEnds))
+        || !set(result.get(), "planar_corner_contacts", PyLong_FromLong(boundary.PlanarCornerContacts))
+        || !set(result.get(), "excluded_corner_contacts", contacts.release())) {
         return nullptr;
     }
     auto owned = std::make_unique<Ops::Boundary>(boundary);

@@ -48,7 +48,8 @@ def trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,
                                distance_tolerance, maximum_cells, allow_exact_lattice_nodes)
 
 
-def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
+def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512,
+              corner_policy="reject"):
     """Experimental F<=0 gyroid/axis-aligned Part box boundary, NOT a Part solid.
 
     Planar caps are independent conventional Part faces. The opaque native face
@@ -58,7 +59,10 @@ def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512):
     """
     if not isinstance(box, Part.Shape):
         raise TypeError("box must be a conventional Part.Shape")
-    result = _mixed_box(field, box.exportBrepToString(), operation, tolerance, maximum_cells)
+    # Regularized corner boundaries are transient: existing persistence,
+    # classification and solid factories reject until they support that policy.
+    result = _mixed_box(field, box.exportBrepToString(), operation, tolerance, maximum_cells,
+                        corner_policy)
     return _decode_caps(result, operation)
 
 
