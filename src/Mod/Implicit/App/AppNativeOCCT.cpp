@@ -1055,6 +1055,93 @@ PyObject* checkMixedCoverage(PyObject* args)
     return result.release();
 }
 
+const char* cornerKind(BRepClass3d_ImplicitBox::CornerKind kind)
+{
+    using Kind = BRepClass3d_ImplicitBox::CornerKind;
+    switch (kind) {
+        case Kind::Positive: return "positive";
+        case Kind::Negative: return "negative";
+        case Kind::PositiveCone: return "positive_cone";
+        case Kind::NegativeCone: return "negative_cone";
+        case Kind::SplitCone: return "split_cone";
+        default: return "unresolved";
+    }
+}
+
+PyObject* checkBoxCorners(PyObject* args)
+{
+    PyObject* object;
+    double radius = .1;
+    if (!PyArg_ParseTuple(args, "O|d", &object, &radius)) {
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    const auto report = BRepClass3d_ImplicitBox::CheckCornerGerms(*face, radius);
+    Object result(Py_BuildValue("{s:O,s:i,s:i,s:d,s:d,s:O,s:O}",
+        "corner_germs_resolved", report.Resolved ? Py_True : Py_False,
+        "exact_zero_count", report.ExactZeroCount, "split_count", report.SplitCount,
+        "coordinate_reserve", report.CoordinateReserve, "hessian_bound", report.HessianBound,
+        "topology_validated", Py_False, "solid_validated", Py_False));
+    Object corners(PyList_New(8));
+    if (!result || !corners) {
+        return nullptr;
+    }
+    for (size_t index = 0; index < report.Corners.size(); ++index) {
+        const auto& corner = report.Corners[index];
+        Object item(Py_BuildValue("{s:i,s:s,s:O,s:d,s:s}",
+            "index", int(index), "kind", cornerKind(corner.Kind),
+            "exact_zero", corner.ExactZero ? Py_True : Py_False,
+            "radius", corner.Radius, "reason", corner.Reason.c_str()));
+        if (!item || !set(item.get(), "anchor", xyz(corner.Anchor.XYZ()))
+            || !set(item.get(), "minimum", xyz(corner.Minimum.XYZ()))
+            || !set(item.get(), "maximum", xyz(corner.Maximum.XYZ()))
+            || !set(item.get(), "inward_derivative_lower", Py_BuildValue("(ddd)",
+                corner.InwardDerivativeLower[0], corner.InwardDerivativeLower[1], corner.InwardDerivativeLower[2]))
+            || !set(item.get(), "inward_derivative_upper", Py_BuildValue("(ddd)",
+                corner.InwardDerivativeUpper[0], corner.InwardDerivativeUpper[1], corner.InwardDerivativeUpper[2]))) {
+            return nullptr;
+        }
+        PyList_SET_ITEM(corners.get(), Py_ssize_t(index), item.release());
+    }
+    if (!set(result.get(), "corners", corners.release())) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+PyObject* classifyBoxCorner(PyObject* args)
+{
+    PyObject *object, *coordinate;
+    int index;
+    const char* operation = "common";
+    double radius = .1;
+    gp_Pnt p;
+    if (!PyArg_ParseTuple(args, "OiO|sd", &object, &index, &coordinate, &operation, &radius)
+        || !point(coordinate, p)) {
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    using Ops = BRepClass3d_ImplicitBox;
+    const std::string name(operation);
+    if (name != "common" && name != "box_minus_field") {
+        throw Standard_DomainError("expected common or box_minus_field");
+    }
+    const auto query = Ops::ClassifyCornerGerm(*face, index, p,
+        name == "common" ? Ops::Operation::Common : Ops::Operation::BoxMinusField, radius);
+    return Py_BuildValue("{s:O,s:O,s:O,s:O,s:s,s:O}",
+        "resolved", query.Resolved ? Py_True : Py_False,
+        "on_field", query.OnField ? Py_True : Py_False,
+        "closed_retained", query.ClosedRetained ? Py_True : Py_False,
+        "regularized_retained", query.RegularizedRetained ? Py_True : Py_False,
+        "reason", query.Reason.c_str(), "solid_validated", Py_False);
+}
+
 template<bool Mixed>
 PyObject* checkBoxRegularity(PyObject* args)
 {
@@ -2010,6 +2097,12 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
+    {"check_box_corners", checked<checkBoxCorners>, METH_VARARGS,
+     "check_box_corners(native_gyroid_face, maximum_radius=.1) -> local corner germs; "
+     "NOT strict box regularity, trim topology or solid validation. Corner bits encode high XYZ."},
+    {"classify_box_corner", checked<classifyBoxCorner>, METH_VARARGS,
+     "classify_box_corner(face, corner_index, point, operation='common', maximum_radius=.1) -> "
+     "closed versus regularized LOCAL membership; not whole-solid distance classification."},
     {"check_box_regularity",
      checked<checkBoxRegularity<false>>,
      METH_VARARGS,
