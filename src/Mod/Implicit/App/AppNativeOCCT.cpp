@@ -1707,7 +1707,13 @@ PyObject* regionTopologyReport(const BRepClass3d_ImplicitBox::RegionTopologyWitn
     const auto integer = [](int value) {
         return PyLong_FromLong(value);
     };
-    if (!set(
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            report.Surface.Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized
+                ? "regularized" : "reject"))
+        || !set(result.get(), "fixed_corner_count", PyLong_FromLong(report.Surface.FixedCornerCount))
+        || !set(result.get(), "surface_point_contacts", convertedList(report.Surface.PointContacts,
+            [](const gp_Pnt& p) { return xyz(p.XYZ()); }))
+        || !set(
             result.get(),
             "reference_vertices",
             convertedList(report.Nodes, [](const gp_Pnt& p) { return xyz(p.XYZ()); })
@@ -1809,11 +1815,8 @@ PyObject* checkBoxTopology(PyObject* args)
         }
     }
     if constexpr (Region) {
-        if (policy != Ops::CornerPolicy::Reject) {
-            throw Standard_NotImplemented("Corner-aware closed region reference is not implemented");
-        }
         return regionTopologyReport(
-            BRepClass3d_ImplicitBox::CheckRegionTopology(*face, resolution, depth, size_t(cells))
+            Ops::CheckRegionTopology(*face, resolution, depth, size_t(cells), policy)
         );
     }
     const auto report = Ops::CheckTopology(*face, resolution, depth, size_t(cells), policy);

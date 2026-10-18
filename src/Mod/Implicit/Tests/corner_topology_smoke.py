@@ -84,7 +84,8 @@ def main():
         assert not native.inspect_mixed(restored["boundary_handle"])["seam_bound_verified"]
         assert native.dumps_mixed(handle) == record
         rejected(lambda: native.check_mixed_topology(handle, 32, 16, 4000000, "reject"))
-        rejected(lambda: native.check_mixed_region_topology(handle))
+        region = native.check_mixed_region_topology(handle)
+        assert region["closed_reference_manifold"] and not region["native_shell_constructed"]
         rejected(lambda: native.build_mixed_shells(handle))
     rejected(lambda: native.check_box_topology(face, 32, 16, 4000000, "guess"))
     assert native.dumps(face) == before
