@@ -25,7 +25,7 @@ def main():
     assert native.classify_mixed(obj.getPropertyOfGeometry(), (0, 0, 2))["state"] == "inside"
     old = obj.Geometry
     geometry = Implicit.nativeGeometry(obj)
-    assert geometry.getElementTypes() == ["NativeFace", "Cap", "Seam"]
+    assert geometry.getElementTypes() == ["NativeFace", "Cap", "Seam", "Edge", "Vertex"]
     assert geometry.countSubElements("NativeFace") == 1
     assert geometry.countSubElements("Cap") == obj.PlanarCapCount
     assert geometry.countSubElements("Seam") == obj.SeamCount
@@ -218,12 +218,19 @@ def main():
     restored_owner.Geometry = native.dumps_mixed(crossing.Geometry)
     after = Implicit.nativeGeometry(restored_owner)
     assert native.inspect_mixed(restored_owner.Geometry)["seams"] == preview
-    for kind in ("NativeFace", "Cap", "Seam"):
+    for kind in before.getElementTypes():
         assert before.countSubElements(kind) == after.countSubElements(kind)
         for index in range(1, before.countSubElements(kind) + 1):
             a = before.getLinesFromSubElement(kind, index)
             b = after.getLinesFromSubElement(kind, index)
-            assert a == b, (kind, index)
+            if kind == "Vertex":
+                # Conventional BRep vertex coordinates use 15 significant
+                # decimal digits; curve poles use the geometry codec's precision.
+                reserve = 64 * 2.220446049250313e-16 * max(1, before.BoundBox.DiagonalLength)
+                assert a[1] == b[1] == [] and len(a[0]) == len(b[0]) == 1
+                assert (a[0][0] - b[0][0]).Length <= reserve, (kind, index, a, b)
+            else:
+                assert a == b, (kind, index)
     App.closeDocument(crossing_doc.Name)
     print("native implicit geometry property smoke test passed", flush=True)
 

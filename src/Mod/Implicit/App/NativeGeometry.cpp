@@ -17,6 +17,8 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <Python.h>
@@ -29,6 +31,22 @@
 namespace
 {
 constexpr const char* capsuleName = "ImplicitOCCT.HybridBoundary.v1";
+using ShapeMap = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
+void indexTopology(const Implicit::NativeBoundary& boundary, ShapeMap& edges, ShapeMap& vertices)
+{
+    TopExp::MapShapes(boundary.Shape, TopAbs_EDGE, edges);
+    // Face/wire orientation can alter recursive vertex visitation after I/O.
+    // Edge order and forward curve endpoints are preserved by the native codec.
+    for (const auto& edge : edges) {
+        TopoDS_Vertex first, last;
+        TopExp::Vertices(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), first, last);
+        if (first.IsNull() || last.IsNull()) {
+            throw Base::ValueError("Native edge is missing a topological endpoint");
+        }
+        vertices.Add(first);
+        vertices.Add(last);
+    }
+}
 void placePoint(const Base::Matrix4D& matrix, Base::Vector3d& point)
 {
     matrix.multVec(point, point);
@@ -84,6 +102,11 @@ void boundaryLines(
     std::vector<Data::ComplexGeoData::Line>& lines
 )
 {
+    if (shape.ShapeType() == TopAbs_VERTEX) {
+        const auto p = BRep_Tool::Pnt(TopoDS::Vertex(shape));
+        points.emplace_back(p.X(), p.Y(), p.Z());
+        return;
+    }
     NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
     TopExp::MapShapes(shape, TopAbs_EDGE, edges);
     for (const auto& edge : edges) {
@@ -371,6 +394,21 @@ void NativeElementGeometry::getLines(
 {
     getLinesFromSubElement(element.get(), points, lines);
 }
+void NativeElementGeometry::getPoints(
+    std::vector<Base::Vector3d>& points,
+    std::vector<Base::Vector3d>&,
+    double,
+    uint16_t
+) const
+{
+    if (!element || checkedSegment(element.get(), boundary).shape.ShapeType() != TopAbs_VERTEX) {
+        throw Base::NotImplementedError("Native surface/edge point sampling is not implemented");
+    }
+    Base::Vector3d point;
+    if (getFirstVertexFromSubElement(element.get(), point)) {
+        points.push_back(point);
+    }
+}
 void NativeElementGeometry::getLinesFromSubElement(
     const Data::Segment* selected,
     std::vector<Base::Vector3d>& points,
@@ -438,10 +476,14 @@ void NativeGeometry::setBoundary(NativeBoundaryPtr next)
         )
                                 .toHex();
         const std::string prefix = "ImplicitV1_" + digest.toStdString() + ":";
-        for (const auto* type : {"NativeFace", "Cap", "Seam"}) {
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges, vertices;
+        indexTopology(*next, edges, vertices);
+        for (const auto* type : {"NativeFace", "Cap", "Seam", "Edge", "Vertex"}) {
             const size_t count = std::strcmp(type, "NativeFace") == 0 ? 1
                 : std::strcmp(type, "Cap") == 0                       ? next->Faces.size() - 1
-                                                                      : next->SeamCount;
+                : std::strcmp(type, "Seam") == 0                      ? next->SeamCount
+                : std::strcmp(type, "Edge") == 0                      ? edges.Size()
+                                                                      : vertices.Size();
             for (size_t index = 1; index <= count; ++index) {
                 const auto name = prefix + type + std::to_string(index);
                 names->setElementName(
@@ -458,7 +500,7 @@ void NativeGeometry::setBoundary(NativeBoundaryPtr next)
 
 std::vector<const char*> NativeGeometry::getElementTypes() const
 {
-    return {"NativeFace", "Cap", "Seam"};
+    return {"NativeFace", "Cap", "Seam", "Edge", "Vertex"};
 }
 unsigned long NativeGeometry::countSubElements(const char* type) const
 {
@@ -473,6 +515,11 @@ unsigned long NativeGeometry::countSubElements(const char* type) const
     }
     if (std::strcmp(type, "Seam") == 0) {
         return boundary->SeamCount;
+    }
+    if (std::strcmp(type, "Edge") == 0 || std::strcmp(type, "Vertex") == 0) {
+        ShapeMap edges, vertices;
+        indexTopology(*boundary, edges, vertices);
+        return std::strcmp(type, "Edge") == 0 ? edges.Size() : vertices.Size();
     }
     return 0;
 }
@@ -491,10 +538,19 @@ Data::Segment* NativeGeometry::getSubElement(const char* type, unsigned long ind
     else if (std::strcmp(type, "Cap") == 0) {
         result->shape = boundary->Faces.at(index - 1);
     }
+    else if (std::strcmp(type, "Vertex") == 0) {
+        ShapeMap edges, vertices;
+        indexTopology(*boundary, edges, vertices);
+        result->shape = vertices.FindKey(int(index));
+    }
     else {
-        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
-        TopExp::MapShapes(boundary->Faces.back(), TopAbs_EDGE, edges);
-        result->shape = edges.FindKey(int(index));
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> shapes;
+        const TopoDS_Shape* topology = &boundary->Shape;
+        if (std::strcmp(type, "Seam") == 0) {
+            topology = &boundary->Faces.back();
+        }
+        TopExp::MapShapes(*topology, TopAbs_EDGE, shapes);
+        result->shape = shapes.FindKey(int(index));
     }
     return result.release();
 }
@@ -520,6 +576,11 @@ void NativeGeometry::getLinesFromSubElement(
 bool NativeGeometry::getFirstVertexFromSubElement(const Data::Segment* segment, Base::Vector3d& point) const
 {
     const auto& shape = checkedSegment(segment, boundary).shape;
+    if (shape.ShapeType() == TopAbs_VERTEX) {
+        const auto p = BRep_Tool::Pnt(TopoDS::Vertex(shape));
+        point = Base::Vector3d(p.X(), p.Y(), p.Z());
+        return true;
+    }
     TopExp_Explorer vertices(shape, TopAbs_VERTEX);
     if (!vertices.More()) {
         return false;

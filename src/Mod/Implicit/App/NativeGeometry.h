@@ -128,6 +128,8 @@ public:
     unsigned long countSubElements(const char*) const override;
     Data::Segment* getSubElement(const char*, unsigned long) const override;
     Base::BoundBox3d getBoundBox() const override;
+    void getPoints(std::vector<Base::Vector3d>&, std::vector<Base::Vector3d>&,
+                   double, uint16_t = 0) const override;
     void getLines(std::vector<Base::Vector3d>&, std::vector<Line>&, double, uint16_t = 0) const override;
     void getLinesFromSubElement(
         const Data::Segment*,

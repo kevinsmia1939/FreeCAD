@@ -37,7 +37,7 @@ def main():
         assert whole is not None
         compare(whole.getLines(.1)[0], [pose.multVec(p) for p in points])
         assert whole.Placement == App.Placement()
-        for kind in ("NativeFace", "Cap", "Seam"):
+        for kind in local.getElementTypes():
             assert whole.countSubElements(kind) == local.countSubElements(kind)
             for index in range(1, local.countSubElements(kind) + 1):
                 name = kind + str(index)

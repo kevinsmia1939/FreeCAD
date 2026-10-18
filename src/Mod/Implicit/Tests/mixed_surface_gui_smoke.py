@@ -16,6 +16,9 @@ def check_pick(obj):
     assert mesh and mesh["mesh_closed"] and not mesh["solid_validated"]
     assert not mesh["surface_coverage_verified"]
     assert view._surface_faces.coordIndex.getNum() == len(mesh["implicit_triangles"]) * 4
+    assert view._surface_normals.vector.getNum() == len(mesh["vertices"])
+    binding = view._surface_root.getChild(2)
+    assert binding.value.getValue() == coin.SoNormalBinding.PER_VERTEX_INDEXED
     triangle = mesh["implicit_triangles"][len(mesh["implicit_triangles"]) // 2]
     p, q, r = (App.Vector(*mesh["vertices"][i]) for i in triangle)
     center, normal = (p + q + r) / 3, (q - p).cross(r - p).normalize()
@@ -37,9 +40,17 @@ def check_pick(obj):
 
 
 def main():
-    Gui.activateWorkbench("NativeImplicitWorkbench")
+    Gui.activateWorkbench("ImplicitModelingWorkbench")
+    assert "Implicit_NativeTopologyDemo" in Gui.listCommands()
     for crossing in (False, True):
-        obj = ImplicitMixed.demo(open_contours=crossing)
+        if crossing:
+            Gui.runCommand("Implicit_NativeTopologyDemo")
+            obj = App.ActiveDocument.Objects[-1]
+            check_pick(obj)
+            assert obj.ViewObject.Proxy._edge_nodes and obj.ViewObject.Proxy._vertex_nodes
+            obj.ViewObject.ShowImplicitSurface = False
+        else:
+            obj = ImplicitMixed.demo(open_contours=False)
         doc = obj.Document
         view = obj.ViewObject.Proxy
         assert not obj.ViewObject.ShowImplicitSurface and view._surface_mesh is None
@@ -60,6 +71,10 @@ def main():
             Gui.activeDocument().activeView().fitAll()
             Gui.updateGui()
             assert len(calls) == 1 and view._surface_mesh is first
+            for name in ("ShowVertices", "ShowBoundaryEdges"):
+                setattr(obj.ViewObject, name, False)
+                setattr(obj.ViewObject, name, True)
+            assert len(calls) == 1 and view._surface_mesh is first, "display toggles remeshed geometry"
             assert native.dumps_mixed(obj.Geometry) == record
             obj.ViewObject.ShowImplicitSurface = False
             assert view._surface_mesh is None and view._surface_faces.coordIndex.getNum() == 0

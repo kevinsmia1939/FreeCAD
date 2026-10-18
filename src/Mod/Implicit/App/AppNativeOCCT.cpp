@@ -21,6 +21,8 @@
 #include <Standard_NotImplemented.hxx>
 #include <Standard_Version.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <gp_Trsf.hxx>
 #include <cmath>
 #include <memory>
@@ -579,6 +581,70 @@ PyObject* boundaryResult(const BRepClass3d_ImplicitBox::Boundary& boundary)
             return nullptr;
         }
     }
+    // Canonical whole-boundary identities, including conventional box edges.
+    // Coordinates never weld unrelated vertices or invent vertices at poles.
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> allEdges, allVertices;
+    TopExp::MapShapes(boundary.Shape, TopAbs_EDGE, allEdges);
+    for (const auto& edge : allEdges) {
+        TopoDS_Vertex first, last;
+        TopExp::Vertices(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), first, last);
+        if (first.IsNull() || last.IsNull()) {
+            throw Standard_DomainError("Native edge is missing a topological endpoint");
+        }
+        allVertices.Add(first);
+        allVertices.Add(last);
+    }
+    Object edgePoints(PyList_New(0)), vertexPoints(PyList_New(0)),
+        edgeVertices(PyList_New(0)), seamEdges(PyList_New(0));
+    if (!edgePoints || !vertexPoints || !edgeVertices || !seamEdges) {
+        return nullptr;
+    }
+    for (const auto& vertex : allVertices) {
+        Object p(xyz(BRep_Tool::Pnt(TopoDS::Vertex(vertex)).XYZ()));
+        if (!p || PyList_Append(vertexPoints.get(), p.get()) < 0) {
+            return nullptr;
+        }
+    }
+    for (const auto& shape : allEdges) {
+        const auto edge = TopoDS::Edge(shape);
+        TopoDS_Vertex firstVertex, lastVertex;
+        TopExp::Vertices(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), firstVertex, lastVertex);
+        Object endpoints(Py_BuildValue("(ii)", allVertices.FindIndex(firstVertex) - 1,
+                                        allVertices.FindIndex(lastVertex) - 1));
+        TopLoc_Location location;
+        double first, last;
+        const auto curve = occ::down_cast<Geom_BSplineCurve>(BRep_Tool::Curve(edge, location, first, last));
+        if (curve.IsNull() || curve->Degree() != 1) {
+            throw Standard_NotImplemented("Unsupported native topology curve");
+        }
+        Object points(PyList_New(curve->NbPoles()));
+        if (!points || !endpoints) {
+            return nullptr;
+        }
+        for (int i = 0; i < curve->NbPoles(); ++i) {
+            auto* point = xyz(curve->Pole(i + 1).Transformed(location.Transformation()).XYZ());
+            if (!point) {
+                return nullptr;
+            }
+            PyList_SET_ITEM(points.get(), i, point);
+        }
+        if (PyList_Append(edgePoints.get(), points.get()) < 0
+            || PyList_Append(edgeVertices.get(), endpoints.get()) < 0) {
+            return nullptr;
+        }
+    }
+    for (const auto& seam : edges) {
+        Object index(PyLong_FromLong(allEdges.FindIndex(seam) - 1));
+        if (!index || PyList_Append(seamEdges.get(), index.get()) < 0) {
+            return nullptr;
+        }
+    }
+    if (!set(result.get(), "edge_points", edgePoints.release())
+        || !set(result.get(), "vertex_points", vertexPoints.release())
+        || !set(result.get(), "edge_vertices", edgeVertices.release())
+        || !set(result.get(), "seam_edges", seamEdges.release())) {
+        return nullptr;
+    }
     auto owned = std::make_unique<Ops::Boundary>(boundary);
     Object handle(PyCapsule_New(owned.get(), boundaryName, destroyBoundary));
     if (!handle) {
@@ -805,6 +871,33 @@ PyObject* prepareMixedMesh(PyObject* args)
             return nullptr;
         }
         PyList_SET_ITEM(implicitTriangles.get(), i, triangle);
+    }
+    if constexpr (Surface) {
+        // Field normals smooth the display only. Cap normals remain separate
+        // so the native cap/field boundary retains its actual sharp crease.
+        std::vector<bool> used(mesh.Nodes.size(), false);
+        for (const auto& triangle : mesh.ImplicitTriangles) {
+            for (int index : triangle) {
+                used.at(size_t(index)) = true;
+            }
+        }
+        Object normals(PyList_New(mesh.Nodes.size()));
+        if (!normals) {
+            return nullptr;
+        }
+        for (size_t i = 0; i < mesh.Nodes.size(); ++i) {
+            const gp_Vec n = used[i]
+                ? BRep_ImplicitTool::Normal(boundary->Faces.back(), mesh.Nodes[i])
+                : gp_Vec(0, 0, 0);
+            auto* item = xyz(n.XYZ());
+            if (!item) {
+                return nullptr;
+            }
+            PyList_SET_ITEM(normals.get(), i, item);
+        }
+        if (!set(result.get(), "implicit_normals", normals.release())) {
+            return nullptr;
+        }
     }
     const auto indices = [](const std::vector<std::vector<int>>& paths) -> PyObject* {
         Object result(PyList_New(paths.size()));

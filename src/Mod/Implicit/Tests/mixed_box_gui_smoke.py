@@ -9,13 +9,33 @@ import ImplicitOCCT as native
 import Implicit
 
 
+def pixel_pick(obj, point, direction=None):
+    """Use a real camera/pixel aperture, not setRay's nearly zero radius."""
+    from pivy import coin
+    direction = direction or App.Vector(1, 2, 3).normalize()
+    camera = coin.SoOrthographicCamera()
+    camera.position = tuple(point + direction * 5)
+    camera.pointAt(coin.SbVec3f(*point), coin.SbVec3f(0, 1, 0))
+    camera.height = 2
+    camera.nearDistance, camera.farDistance = .1, 10
+    scene = coin.SoSeparator()
+    scene.addChild(camera)
+    scene.addChild(obj.ViewObject.RootNode)
+    pick = coin.SoRayPickAction(coin.SbViewportRegion(512, 512))
+    pick.setPickAll(True)
+    pick.setPoint(coin.SbVec2s(256, 256))
+    pick.apply(scene)
+    return [obj.ViewObject.getElementPicked(hit) for hit in pick.getPickedPointList()]
+
+
 def check_subelements(obj):
     from pivy import coin
     view = obj.ViewObject.Proxy
     assert len(view._cap_nodes) == obj.PlanarCapCount
     assert len(view._seam_nodes) == obj.SeamCount
     geometry = Implicit.nativeGeometry(obj)
-    for prefix, nodes in (("Cap", view._cap_nodes), ("Seam", view._seam_nodes)):
+    for prefix, nodes in (("Cap", view._cap_nodes), ("Seam", view._seam_nodes),
+                          ("Edge", view._edge_nodes), ("Vertex", view._vertex_nodes)):
         for index, node in enumerate(nodes, 1):
             name = prefix + str(index)
             path = coin.SoPath()
@@ -49,12 +69,39 @@ def check_subelements(obj):
     pick.apply(obj.ViewObject.RootNode)
     names = [obj.ViewObject.getElementPicked(hit) for hit in pick.getPickedPointList()]
     assert "Seam1" in names, names
+    topology = native.inspect_mixed(obj.Geometry)
+    assert len(view._edge_nodes) == len(topology["edge_points"])
+    assert len(view._vertex_nodes) == len(topology["vertex_points"])
+    for seam_index, edge_index in enumerate(topology["seam_edges"]):
+        assert view._seam_nodes[seam_index] == view._edge_nodes[edge_index]
+    # True vertex and non-seam box-edge hits, not mesh vertices/triangle edges.
+    vertex = App.Vector(topology["vertex_points"][0])
+    names = pixel_pick(obj, vertex)
+    assert "Vertex1" in names, names
+    for index, points in enumerate(topology["edge_points"]):
+        if index in topology["seam_edges"]:
+            continue
+        a, b = App.Vector(points[0]), App.Vector(points[1])
+        direction = (b - a).cross(App.Vector(1, 2, 3)).normalize()
+        midpoint = (a + b) * .5
+        names = pixel_pick(obj, midpoint, direction)
+        assert "Edge" + str(index + 1) in names, names
+        break  # The disk-only cap fixture has no conventional box-edge segment.
+    for property_name, element in (("ShowVertices", "Vertex1"), ("ShowBoundaryEdges", "Edge1")):
+        setattr(obj.ViewObject, property_name, False)
+        path = coin.SoPath()
+        obj.ViewObject.getDetailPath(element, path)
+        assert path.getLength() == 0
+        assert element not in pixel_pick(obj, vertex)
+        setattr(obj.ViewObject, property_name, True)
     Gui.Selection.clearSelection()
     Gui.Selection.addSelection(obj, "Cap1")
     Gui.Selection.addSelection(obj, "Seam1")
+    Gui.Selection.addSelection(obj, "Edge1")
+    Gui.Selection.addSelection(obj, "Vertex1")
     selected = Gui.Selection.getSelectionEx()
-    assert selected and set(selected[0].SubElementNames) == {"Cap1", "Seam1"}
-    assert len(selected[0].SubObjects) == 2
+    assert selected and set(selected[0].SubElementNames) == {"Cap1", "Seam1", "Edge1", "Vertex1"}
+    assert len(selected[0].SubObjects) == 4
     for element in selected[0].SubObjects:
         assert element.getElementTypes() == ["Element"]
         assert element.getLines(.1)[0]
@@ -101,12 +148,21 @@ def main():
     actual = linked_geometry.getLines(.1)[0]
     assert len(actual) == len(expected)
     assert all((a - b).Length < 1e-10 for a, b in zip(actual, expected))
+    topology = native.inspect_mixed(obj.Geometry)
+    local_vertex = App.Vector(topology["vertex_points"][0])
+    placed_vertex = instance.LinkPlacement.multVec(local_vertex)
+    names = pixel_pick(instance, placed_vertex)
+    assert "Vertex1" in names, names
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(instance, "Vertex1")
+    point = Gui.Selection.getSelectionEx()[0].SubObjects[0].getPoints(.1)[0][0]
+    assert (point - placed_vertex).Length < 1e-10
     Gui.Selection.clearSelection()
     Gui.Selection.addSelection(instance)
     whole_selection = Gui.Selection.getSelectionEx()[0]
     assert not whole_selection.SubElementNames and not whole_selection.SubObjects
     whole_geometry = whole_selection.Object.getSubObject("")
-    assert whole_geometry.getElementTypes() == ["NativeFace", "Cap", "Seam"]
+    assert whole_geometry.getElementTypes() == ["NativeFace", "Cap", "Seam", "Edge", "Vertex"]
     expected = [instance.LinkPlacement.multVec(p) for p in retained_geometry.getLines(.1)[0]]
     actual = whole_geometry.getLines(.1)[0]
     assert len(actual) == len(expected)
@@ -135,6 +191,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="implicit-mixed-gui-") as directory:
         filename = os.path.join(directory, "mixed.FCStd")
         name = obj.Name
+        obj.ViewObject.ShowVertices = False
+        obj.ViewObject.ShowBoundaryEdges = False
         doc.saveAs(filename)
         build = native._mixed_box
         def forbidden(*_args, **_kwargs):
@@ -152,6 +210,9 @@ def main():
         assert obj.Proxy.native_boundary()["seam_bound_verified"] is False
         view = obj.ViewObject.Proxy
         assert view._coordinates.point.getNum() > 0 and view._seam_coordinates.point.getNum() > 0
+        assert not obj.ViewObject.ShowVertices and not obj.ViewObject.ShowBoundaryEdges
+        obj.ViewObject.ShowVertices = True
+        obj.ViewObject.ShowBoundaryEdges = True
         check_subelements(obj)
     obj.Field.IsoValue = 0
     doc.recompute()
@@ -168,6 +229,8 @@ def main():
     assert view._coordinates.point.getNum() == 0 and view._seam_coordinates.point.getNum() == 0
     assert obj.Proxy._boundary is None
     assert not view._cap_nodes and not view._seam_nodes
+    assert not view._edge_nodes and not view._vertex_nodes
+    assert view._vertex_coordinates.point.getNum() == view._edge_coordinates.point.getNum() == 0
     assert not Gui.Selection.getSelectionEx()
     obj.Field.IsoValue = 1.45
     obj.MaximumCells = 512

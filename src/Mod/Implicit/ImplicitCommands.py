@@ -83,6 +83,17 @@ def create_gyroid():
     return feature
 
 
+def create_topology_demo():
+    """Supported native trim fixture, explicitly separate from the simple primitive."""
+    import ImplicitMixed
+    obj = ImplicitMixed.demo(open_contours=True)
+    obj.ViewObject.ShowImplicitSurface = True
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(obj)
+    Gui.activeDocument().activeView().fitAll()
+    return obj
+
+
 def boolean(operation):
     selection = Gui.Selection.getSelection()
     if len(selection) != 2 or any(
@@ -266,7 +277,7 @@ class Command:
 
     def GetResources(self):
         return {"MenuText": self.title, "ToolTip": self.title,
-                "Pixmap": GYROID_ICON if self.action is create_gyroid else ""}
+                "Pixmap": GYROID_ICON if self.action in (create_gyroid, create_topology_demo) else ""}
 
     def IsActive(self):
         return True
@@ -304,6 +315,8 @@ def register():
         pass
     else:
         import ImplicitMixed
+        commands.append(("Implicit_NativeTopologyDemo", "Native boundary selection demo (experimental)",
+                         create_topology_demo))
         commands.append(("Implicit_OCCTInProcessSphere", "OCCT in-process sphere (experimental)",
                          lambda: ImplicitNative.create("Sphere", backend="InProcess")))
         commands.append(("Implicit_OCCTMixedDemo", "Native gyroid/box demo (caps/seams only)",

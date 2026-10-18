@@ -20,7 +20,7 @@ def main():
     initial = slot.Geometry
     geometry = Implicit.nativeGeometry(slot)
     mapped = {}
-    for kind in ("NativeFace", "Cap", "Seam"):
+    for kind in geometry.getElementTypes():
         for index in range(1, geometry.countSubElements(kind) + 1):
             name = kind + str(index)
             identity = geometry.getElementName(name, 1)
@@ -34,7 +34,7 @@ def main():
     link.addProperty("App::PropertyLinkSub", "Reference")
     link.Reference = (slot, ["Cap1"])
     link.addProperty("App::PropertyLinkSubList", "References")
-    link.References = [(slot, ["Cap1", "Seam1"])]
+    link.References = [(slot, ["Cap1", "Seam1", "Edge1", "Vertex1"])]
     slot_name, link_name, obj_name = slot.Name, link.Name, obj.Name
     with tempfile.TemporaryDirectory(prefix="implicit-reference-") as directory:
         filename = os.path.join(directory, "reference.FCStd")

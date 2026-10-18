@@ -11,9 +11,13 @@ class ImplicitModelingWorkbench(Gui.Workbench):
 
     def Initialize(self):
         import ImplicitCommands
-        ImplicitCommands.register()
+        commands = ImplicitCommands.register()
         self.appendToolbar("Implicit Modelling", ["Implicit_Gyroid"])
         self.appendMenu("Implicit Modelling", ["Implicit_Gyroid"])
+        native = [name for name in ("Implicit_NativeTopologyDemo", "Implicit_OCCTMixedCommon",
+                                   "Implicit_OCCTMixedBoxMinusField") if name in commands]
+        if native:
+            self.appendMenu(["Implicit Modelling", "Native boundaries (experimental)"], native)
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

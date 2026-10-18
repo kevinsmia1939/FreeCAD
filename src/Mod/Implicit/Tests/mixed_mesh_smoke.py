@@ -56,6 +56,23 @@ def check(data, mesh, surface=False):
     assert set(wire_uses) <= set(cap_uses)
     if surface:
         assert mesh["mesh_closed"] and mesh["implicit_triangles"]
+        normals = mesh["implicit_normals"]
+        assert len(normals) == len(vertices)
+        used = {i for triangle in mesh["implicit_triangles"] for i in triangle}
+        k = 2 * math.pi / data["period"]
+        direction = 1 if data["operation"] == "common" else -1
+        for i, n in enumerate(normals):
+            if i not in used:
+                assert n == (0, 0, 0)
+                continue
+            x, y, z = (k * p for p in vertices[i])
+            g = (math.cos(x) * math.cos(y) - math.sin(z) * math.sin(x),
+                 math.cos(y) * math.cos(z) - math.sin(x) * math.sin(y),
+                 math.cos(z) * math.cos(x) - math.sin(y) * math.sin(z))
+            length = math.sqrt(sum(v * v for v in g))
+            expected = tuple(direction * v / length for v in g)
+            assert math.dist(n, expected) < 1e-12
+            assert abs(math.sqrt(sum(v * v for v in n)) - 1) < 1e-12
         assert 0 < mesh["field_distance_bound"] <= .1 and 8 <= mesh["cells"] <= 256
         combined = defaultdict(list, {edge: list(signs) for edge, signs in cap_uses.items()})
         for triangle in mesh["implicit_triangles"]:

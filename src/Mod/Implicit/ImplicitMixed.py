@@ -97,6 +97,10 @@ class MixedBoundary:
         data["planar_caps"] = [cap.copy() for cap in data["planar_caps"]]
         data["cap_sources"] = list(data["cap_sources"])
         data["seams"] = [list(points) for points in data["seams"]]
+        for key in ("edge_points",):
+            data[key] = [list(points) for points in data[key]]
+        for key in ("vertex_points", "edge_vertices", "seam_edges"):
+            data[key] = list(data[key])
         return data
 
     def classify(self, point, distance_tolerance=.1):
@@ -246,6 +250,7 @@ class MixedBoundaryView(NativeBoundaryView):
         self._native_geometry = None
         self._surface_key = self._surface_mesh = None
         self._cap_nodes, self._seam_nodes = [], []
+        self._edge_nodes, self._extra_edge_nodes, self._vertex_nodes = [], [], []
         super().attach(view)
         # Keep aggregate buffers for diagnostics, but render individual native
         # subelements so a cap pick/highlight never denotes one display triangle.
@@ -255,20 +260,54 @@ class MixedBoundaryView(NativeBoundaryView):
         color = coin.SoBaseColor()
         color.rgb = (1, .6, .1)
         separator = coin.SoSeparator()
+        style = coin.SoDrawStyle()
+        style.lineWidth = 2
+        separator.addChild(style)
         for node in (color, self._seam_coordinates, self._seam_lines):
             separator.addChild(node)
         separator.removeChild(self._seam_lines)
         self._seam_root = separator
-        self._root.addChild(separator)
+        self._seam_switch = coin.SoSwitch()
+        self._seam_switch.whichChild = coin.SO_SWITCH_ALL
+        self._seam_switch.addChild(separator)
+        self._root.addChild(self._seam_switch)
         self._surface_coordinates = coin.SoCoordinate3()
         self._surface_normals = coin.SoNormal()
         self._surface_faces = coin.SoIndexedFaceSet()
         binding = coin.SoNormalBinding()
-        binding.value = coin.SoNormalBinding.PER_FACE
+        binding.value = coin.SoNormalBinding.PER_VERTEX_INDEXED
         self._surface_root = coin.SoSeparator()
         for node in (self._surface_coordinates, self._surface_normals, binding, self._surface_faces):
             self._surface_root.addChild(node)
         self._root.addChild(self._surface_root)
+        self._edge_root = coin.SoSeparator()
+        self._edge_coordinates = coin.SoCoordinate3()
+        edge_color = coin.SoBaseColor()
+        edge_color.rgb = (.08, .12, .15)
+        edge_style = coin.SoDrawStyle()
+        edge_style.lineWidth = 2
+        for node in (edge_color, edge_style, self._edge_coordinates):
+            self._edge_root.addChild(node)
+        self._edge_switch = coin.SoSwitch()
+        self._edge_switch.whichChild = coin.SO_SWITCH_ALL
+        self._edge_switch.addChild(self._edge_root)
+        self._root.addChild(self._edge_switch)
+        self._vertex_root = coin.SoSeparator()
+        self._vertex_coordinates = coin.SoCoordinate3()
+        vertex_color = coin.SoBaseColor()
+        vertex_color.rgb = (1, .9, .5)
+        vertex_style = coin.SoDrawStyle()
+        vertex_style.pointSize = 6
+        for node in (vertex_color, vertex_style, self._vertex_coordinates):
+            self._vertex_root.addChild(node)
+        self._vertex_switch = coin.SoSwitch()
+        self._vertex_switch.whichChild = coin.SO_SWITCH_ALL
+        self._vertex_switch.addChild(self._vertex_root)
+        self._root.addChild(self._vertex_switch)
+        for name in ("ShowBoundaryEdges", "ShowVertices"):
+            if name not in view.PropertiesList:
+                view.addProperty("App::PropertyBool", name, "Native topology display")
+                setattr(view, name, True)
         for name, kind, value in (("ShowImplicitSurface", "Bool", False),
                                   ("SurfaceTolerance", "Length", .1),
                                   ("SurfaceMaximumCells", "Integer", 256),
@@ -277,10 +316,23 @@ class MixedBoundaryView(NativeBoundaryView):
                 view.addProperty("App::Property" + kind, name, "Experimental surface preview")
                 setattr(view, name, value)
         view.setEditorMode("SurfacePreviewStatus", 1)
+        self._topology_visibility(view)
         self.updateData(view.Object, "NativeRevision")
+
+    def _topology_visibility(self, view):
+        from pivy import coin
+        if all(name in view.PropertiesList for name in ("ShowBoundaryEdges", "ShowVertices")):
+            state = coin.SO_SWITCH_ALL if view.ShowBoundaryEdges else coin.SO_SWITCH_NONE
+            self._seam_switch.whichChild = state
+            self._edge_switch.whichChild = state
+            self._vertex_switch.whichChild = coin.SO_SWITCH_ALL if view.ShowVertices else coin.SO_SWITCH_NONE
 
     def onChanged(self, view, prop):
         super().onChanged(view, prop)
+        if prop in ("ShowBoundaryEdges", "ShowVertices") and hasattr(self, "_vertex_root"):
+            self._topology_visibility(view)
+            import FreeCADGui as Gui
+            Gui.Selection.removeSelection(view.Object)
         if (prop in ("ShowImplicitSurface", "SurfaceTolerance", "SurfaceMaximumCells")
                 and hasattr(self, "_surface_faces")
                 and all(name in view.PropertiesList for name in
@@ -311,10 +363,7 @@ class MixedBoundaryView(NativeBoundaryView):
             mesh = native.tessellate_mixed(obj.Geometry, view.SurfaceTolerance.Value,
                                           view.SurfaceMaximumCells)
             vertices, triangles = mesh["vertices"], mesh["implicit_triangles"]
-            normals = []
-            for a, b, c in triangles:
-                p, q, r = (App.Vector(*vertices[i]) for i in (a, b, c))
-                normals.append(tuple((q - p).cross(r - p).normalize()))
+            normals = mesh["implicit_normals"]
             indices = [i for tri in triangles for i in (*tri, -1)]
             self._surface_coordinates.point.setValues(0, len(vertices), vertices)
             self._surface_normals.vector.setValues(0, len(normals), normals)
@@ -420,12 +469,51 @@ class MixedBoundaryView(NativeBoundaryView):
             node.coordIndex.setNum(0)
             node.coordIndex.setValues(0, len(indices), indices)
             offset += count
+        # Edge/vertex order comes from the stored native topology, not curves
+        # welded by coordinate or transient mesh points. Seam nodes are shared
+        # aliases of the corresponding EdgeN; they are never drawn twice.
+        topology = getattr(obj.Proxy, "_boundary", None) or {}
+        edges = topology.get("edge_points", [])
+        points = topology.get("vertex_points", [])
+        seam_edges = dict(zip(topology.get("seam_edges", []), self._seam_nodes))
+        extra_indices = [i for i in range(len(edges)) if i not in seam_edges]
+        self._edge_coordinates.point.setNum(0)
+        self._vertex_coordinates.point.setNum(0)
+        flat = [p for i in extra_indices for p in edges[i]]
+        if flat:
+            self._edge_coordinates.point.setValues(0, len(flat), flat)
+        if points:
+            self._vertex_coordinates.point.setValues(0, len(points), points)
+        for nodes, root, count, kind in (
+                (self._extra_edge_nodes, self._edge_root, len(extra_indices), coin.SoIndexedLineSet),
+                (self._vertex_nodes, self._vertex_root, len(points), coin.SoPointSet)):
+            while len(nodes) > count:
+                root.removeChild(nodes.pop())
+            while len(nodes) < count:
+                node = kind()
+                root.addChild(node)
+                nodes.append(node)
+        self._edge_nodes = [None] * len(edges)
+        for index, node in seam_edges.items():
+            self._edge_nodes[index] = node
+        offset = 0
+        for index, node in zip(extra_indices, self._extra_edge_nodes):
+            count = len(edges[index])
+            indices = list(range(offset, offset + count)) + [-1]
+            node.coordIndex.setNum(0)
+            node.coordIndex.setValues(0, len(indices), indices)
+            self._edge_nodes[index] = node
+            offset += count
+        for index, node in enumerate(self._vertex_nodes):
+            node.startIndex = index
+            node.numPoints = 1
 
     def getElementPicked(self, picked):
         tail = picked.getPath().getTail()
         if self._surface_mesh is not None and tail == self._surface_faces:
             return "NativeFace1"
-        for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
+        for prefix, nodes in (("Vertex", self._vertex_nodes), ("Cap", self._cap_nodes),
+                              ("Seam", self._seam_nodes), ("Edge", self._edge_nodes)):
             for index, node in enumerate(nodes, 1):
                 if tail == node:
                     return prefix + str(index)
@@ -439,8 +527,13 @@ class MixedBoundaryView(NativeBoundaryView):
         target = None
         if name == "NativeFace1" and self._surface_mesh is not None:
             target = self._surface_faces
-        for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes)):
+        for prefix, nodes in (("Cap", self._cap_nodes), ("Seam", self._seam_nodes),
+                              ("Edge", self._edge_nodes), ("Vertex", self._vertex_nodes)):
             if name.startswith(prefix):
+                if prefix in ("Seam", "Edge") and not self._view.ShowBoundaryEdges:
+                    return False
+                if prefix == "Vertex" and not self._view.ShowVertices:
+                    return False
                 suffix = name[len(prefix):]
                 if (0 < len(suffix) <= 10 and suffix.isascii() and suffix.isdecimal()
                         and suffix == str(int(suffix))):

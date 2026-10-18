@@ -24,7 +24,7 @@ def main():
     parent.addObject(slot)
     parent.Placement = App.Placement(App.Vector(-6, 2, 1), App.Rotation(App.Vector(0, 1, 0), 19))
     retained = []
-    for kind in ("NativeFace", "Cap", "Seam"):
+    for kind in local.getElementTypes():
         for index in range(1, local.countSubElements(kind) + 1):
             name = kind + str(index)
             mapped = ";" + local.getElementName(name, 1) + "." + name
@@ -37,6 +37,11 @@ def main():
             assert segments == lines
             compare(placed, [slot.Placement.multVec(p) for p in points])
             compare(selected.getLinesFromSubElement("Element", 1)[0], placed)
+            if kind == "Vertex":
+                assert len(placed) == 1 and not segments
+                sampled, normals = selected.getPoints(.1)
+                compare(sampled, placed)
+                assert not normals, "a topological vertex has no unique surface normal"
             assert selected.Placement == App.Placement()  # already pre-placed
             assert all(selected.BoundBox.isInside(p) for p in placed)
             if kind == "NativeFace":
@@ -61,7 +66,7 @@ def main():
                 combined = incoming.multiply(slot.Placement)
                 compare(extra.getLines(.1)[0], [combined.multVec(p) for p in points])
             retained.append((selected, placed))
-    selected = retained[-1][0]
+    selected = retained[0][0]  # Whole native face, not an exact topological point.
     for operation in (lambda: selected.getFaces(.1), lambda: selected.getPoints(.1)):
         try:
             operation()
