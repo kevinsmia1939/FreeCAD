@@ -2,6 +2,7 @@
 """Native workbench commands with persistent live document dependencies."""
 import json
 import itertools
+import os
 import FreeCAD as App
 import FreeCADGui as Gui
 import Implicit
@@ -38,11 +39,48 @@ def primitive(kind):
         return create(None, "SphereField", function="Sphere")
     gyroid = {"type": "gyroid", "period": 10, "iso": 0.0}
     if kind == "gyroid":
-        return create(None, "GyroidField", function="Gyroid")
+        return create_gyroid()
     return create({"type": "intersection",
         "left": {"type": "band", "field": gyroid, "halfWidth": 0.3},
         "right": {"type": "box", "center": [0, 0, 0], "halfSize": [8, 8, 8]}},
         "BoundedGyroidBand")
+
+
+GYROID_ICON = os.path.join(os.path.dirname(__file__), "Resources", "icons", "ImplicitGyroid.svg")
+
+
+def create_gyroid():
+    """Editable native field; dimensions drive the domain through saved expressions."""
+    document = App.ActiveDocument or App.newDocument()
+    document.openTransaction("Add gyroid")
+    try:
+        feature = document.addObject("Implicit::Feature", "Gyroid")
+        feature.Label = "Gyroid"
+        feature.Function = "Gyroid"
+        feature.Period = 10
+        feature.IsoValue = 0
+        feature.DomainMin = (0, 0, 0)
+        feature.DomainMax = (10, 10, 10)
+        for name, axis in zip(("Length", "Width", "Height"), "xyz"):
+            feature.addProperty("App::PropertyLength", name, "Gyroid dimensions",
+                                "Evaluation domain size in millimetres")
+            setattr(feature, name, 10)
+            # App::PropertyVector components are unitless internal millimetres.
+            feature.setExpression("DomainMax." + axis,
+                                  "DomainMin." + axis + " + " + name + " / (1 mm)")
+        feature.ViewObject.Resolution = 32
+        document.recompute()
+        if not feature.isValid():
+            raise RuntimeError("Gyroid failed to recompute")
+        document.commitTransaction()
+    except BaseException:
+        document.abortTransaction()
+        raise
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(feature)
+    Gui.activeDocument().activeView().viewAxonometric()
+    Gui.activeDocument().activeView().fitAll()
+    return feature
 
 
 def boolean(operation):
@@ -227,7 +265,8 @@ class Command:
         self.title, self.action = title, action
 
     def GetResources(self):
-        return {"MenuText": self.title, "ToolTip": self.title, "Pixmap": ""}
+        return {"MenuText": self.title, "ToolTip": self.title,
+                "Pixmap": GYROID_ICON if self.action is create_gyroid else ""}
 
     def IsActive(self):
         return True
@@ -244,7 +283,7 @@ def register():
     import ImplicitSection
     commands = [
         ("Implicit_Sphere", "Implicit sphere", lambda: primitive("sphere")),
-        ("Implicit_Gyroid", "Implicit gyroid", lambda: primitive("gyroid")),
+        ("Implicit_Gyroid", "Add gyroid (10 mm cube)", create_gyroid),
         ("Implicit_Band", "Bounded gyroid band", lambda: primitive("band")),
         ("Implicit_BRep", "Live B-Rep field", brep_link),
         ("Implicit_Union", "Linked field union", lambda: boolean("union")),

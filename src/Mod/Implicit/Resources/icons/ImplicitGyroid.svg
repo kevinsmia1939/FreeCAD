@@ -1,0 +1,10 @@
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <path d="M8 16 32 4 56 16V48L32 60 8 48Z" fill="#12394b" stroke="#85dce9" stroke-width="3"/>
+  <g fill="none" stroke="#42c9bb" stroke-width="4" stroke-linecap="round">
+    <path d="M12 25C22 10 28 44 39 24S51 23 52 30"/>
+    <path d="M12 38C22 23 28 57 39 37S51 36 52 43"/>
+    <path d="M21 15C9 28 40 33 24 51M39 13C26 26 57 31 41 50"/>
+  </g>
+  <path d="M45 45H61M53 37V53" stroke="#fff" stroke-width="4"/>
+</svg>

@@ -25,6 +25,52 @@ def named(root, name):
 
 
 def main():
+    # Exercise the focused workbench and persisted dimensional expressions.
+    Gui.activateWorkbench("ImplicitModelingWorkbench")
+    Gui.runCommand("Implicit_Gyroid")  # Must also create a document when none exists.
+    gyroid_doc = App.ActiveDocument
+    gyroid_doc.UndoMode = 1
+    gyroid = gyroid_doc.Objects[-1]
+    assert gyroid.TypeId == "Implicit::Feature" and not gyroid.FieldGraph
+    assert gyroid.Function == "Gyroid" and gyroid.Period == 10
+    assert gyroid.DomainMin == App.Vector(0, 0, 0)
+    assert gyroid.DomainMax == App.Vector(10, 10, 10)
+    assert all(getattr(gyroid, name).Value == 10 for name in ("Length", "Width", "Height"))
+    import ImplicitCommands as commands
+    from PySide import QtGui
+    assert not QtGui.QIcon(commands.GYROID_ICON).isNull(), "missing gyroid toolbar icon"
+    Gui.updateGui()
+    assert gyroid.ViewObject.TriangleCount > 0
+    assert Gui.Selection.getSelection() == [gyroid]
+    gyroid_doc.openTransaction("Edit gyroid dimensions")
+    gyroid.Length, gyroid.Width, gyroid.Height = 12, 8, 6
+    gyroid.Period, gyroid.IsoValue = 5, 0.2
+    gyroid_doc.recompute()
+    gyroid_doc.commitTransaction()
+    assert gyroid.DomainMax == App.Vector(12, 8, 6)
+    assert abs(Implicit.evaluate(gyroid, 0, 0, 0) + 0.2) < 1e-12
+    gyroid_doc.undo()
+    gyroid_doc.recompute()
+    assert gyroid.DomainMax == App.Vector(10, 10, 10)
+    gyroid_doc.redo()
+    gyroid_doc.recompute()
+    assert gyroid.DomainMax == App.Vector(12, 8, 6)
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "gyroid.FCStd")
+        gyroid_doc.saveAs(path)
+        App.closeDocument(gyroid_doc.Name)
+        gyroid_doc = App.openDocument(path)
+        gyroid = gyroid_doc.getObject("Gyroid")
+        gyroid.Height = 9
+        gyroid_doc.recompute()
+        Gui.updateGui()
+        assert gyroid.DomainMax == App.Vector(12, 8, 9)
+        assert gyroid.ViewObject.TriangleCount > 0
+        Gui.runCommand("Implicit_Gyroid")
+        assert len(gyroid_doc.Objects) == 2
+        gyroid_doc.undo()
+        assert len(gyroid_doc.Objects) == 1
+        App.closeDocument(gyroid_doc.Name)
     document = App.newDocument("ImplicitNativeGuiSmoke")
     document.UndoMode = 1
     Gui.activateWorkbench("NativeImplicitWorkbench")

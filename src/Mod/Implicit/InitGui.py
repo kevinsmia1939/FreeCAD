@@ -19,3 +19,6 @@ class NativeImplicitWorkbench(Gui.Workbench):
 
 
 Gui.addWorkbench(NativeImplicitWorkbench())
+
+import ImplicitWorkbench
+ImplicitWorkbench.register()
