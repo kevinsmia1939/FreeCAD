@@ -22,7 +22,7 @@ if (_spec is None or _spec.origin is None
 from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, info,
                           intersect_ray, dumps, loads, translated, trim,
                           boolean_faces, tessellate, kernel_version, classify_mixed,
-                          prepare_mixed_mesh, tessellate_mixed, audit_mixed_mesh,
+                          prepare_mixed_mesh, tessellate_mixed, tessellate_mixed_checked, audit_mixed_mesh,
                           check_mixed_coverage, check_mixed_regularity, check_box_regularity,
                           check_box_corners, classify_box_corner,
                           check_mixed_correspondence, check_box_topology, check_mixed_topology,

@@ -27,6 +27,7 @@
 #include <TopoDS_Vertex.hxx>
 #include <gp_Trsf.hxx>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -848,13 +849,18 @@ PyObject* classifyMixed(PyObject* args)
     return result.release();
 }
 
-template<bool Surface>
+template<bool Surface, bool CheckedDisplay = false>
 PyObject* prepareMixedMesh(PyObject* args)
 {
     PyObject* object;
     double deflection = .1;
     int maximumNodes = 200000, maximumTriangles = 400000, maximumCells = 256;
-    const bool parsed = Surface
+    int depth = 14;
+    unsigned long long spatial = 2000000, patches = 1000000, pairs = 2000000, broad = 50000000;
+    const bool parsed = CheckedDisplay
+        ? PyArg_ParseTuple(args, "O|diiiiKKKK", &object, &deflection, &maximumCells,
+                           &maximumNodes, &maximumTriangles, &depth, &spatial, &patches, &pairs, &broad)
+        : Surface
         ? PyArg_ParseTuple(args, "O|diii", &object, &deflection, &maximumCells, &maximumNodes, &maximumTriangles)
         : PyArg_ParseTuple(args, "O|dii", &object, &deflection, &maximumNodes, &maximumTriangles);
     if (!parsed) {
@@ -867,7 +873,14 @@ PyObject* prepareMixedMesh(PyObject* args)
     const auto* boundary = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
         PyCapsule_GetPointer(object, boundaryName)
     );
-    const auto mesh = Surface
+    if constexpr (CheckedDisplay) {
+        if (depth < 1 || depth > 20 || !spatial || spatial > 10000000
+            || !patches || patches > 4000000 || !pairs || pairs > 10000000
+            || !broad || broad > 100000000) {
+            throw Standard_DomainError("Invalid checked display budgets");
+        }
+    }
+    auto mesh = Surface
         ? BRepMesh_ImplicitBoundary::Tessellate(
               *boundary,
               deflection,
@@ -876,11 +889,83 @@ PyObject* prepareMixedMesh(PyObject* args)
               maximumTriangles
           )
         : BRepMesh_ImplicitBoundary::Prepare(*boundary, deflection, maximumNodes, maximumTriangles);
+    Object displayChecks, assignmentVertices;
+    if constexpr (CheckedDisplay) {
+        if (!mesh.MeshClosed || !mesh.NativeSurfaceMeshed) {
+            throw Standard_NotImplemented("Checked display requires a closed surface candidate");
+        }
+        // Coin SoCoordinate3 stores binary32, not the native binary64 nodes.
+        // Bound that upload displacement in BOTH proximity directions, and
+        // audit the actual rounded coordinates for collapse/new contacts.
+        auto uploaded = mesh.Nodes;
+        double uploadBound = 0, magnitude = 1;
+        for (size_t i = 0; i < uploaded.size(); ++i) {
+            for (int axis = 1; axis <= 3; ++axis) {
+                const double value = mesh.Nodes[i].Coord(axis);
+                if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max()) {
+                    throw Standard_DomainError("Display coordinate exceeds binary32 range");
+                }
+                magnitude = std::max(magnitude, std::abs(value));
+                uploaded[i].SetCoord(axis, static_cast<double>(static_cast<float>(value)));
+            }
+            uploadBound = std::max(uploadBound, mesh.Nodes[i].Distance(uploaded[i]));
+        }
+        uploadBound += 256 * std::numeric_limits<double>::epsilon() * magnitude;
+        if (!std::isfinite(uploadBound) || !(deflection > 4096 * uploadBound)) {
+            throw Standard_DomainError("Display upload precision exhausted");
+        }
+        const auto coverage = BRepMesh_ImplicitBoundary::CheckCoverage(
+            *boundary, mesh, deflection - uploadBound, depth, size_t(spatial), size_t(patches));
+        if (!coverage.Resolved) {
+            throw Standard_NotImplemented("Checked display clipped proximity unresolved");
+        }
+        assignmentVertices = Object(PyList_New(mesh.Nodes.size()));
+        if (!assignmentVertices) {
+            return nullptr;
+        }
+        for (size_t i = 0; i < mesh.Nodes.size(); ++i) {
+            auto* p = xyz(mesh.Nodes[i].XYZ());
+            if (!p) {
+                return nullptr;
+            }
+            PyList_SET_ITEM(assignmentVertices.get(), i, p);
+        }
+        mesh.Nodes = std::move(uploaded);
+        const auto audit = BRepMesh_ImplicitBoundary::Audit(mesh, size_t(pairs), size_t(broad));
+        using State = BRepMesh_ImplicitBoundary::MeshAudit::State;
+        if (audit.Status != State::Clear) {
+            throw Standard_NotImplemented(audit.Status == State::Limit
+                ? "Checked display contact audit budget exhausted"
+                : "Checked display upload creates triangle contacts or degeneracies");
+        }
+        mesh.FieldDistanceBound += uploadBound;
+        displayChecks = Object(Py_BuildValue(
+            "{s:O,s:O,s:O,s:O,s:d,s:d,s:d,s:d,s:K,s:K,s:K,s:K,s:s}",
+            "boundary_proximity_resolved", Py_True, "triangle_contacts_clear", Py_True,
+            "topology_validated", Py_False, "solid_validated", Py_False,
+            "distance_tolerance", deflection, "upload_coordinate_bound", uploadBound,
+            "boundary_to_mesh_bound", coverage.BoundaryToMeshBound + uploadBound,
+            "mesh_to_boundary_bound", coverage.MeshToBoundaryBound + uploadBound,
+            "spatial_cells", static_cast<unsigned long long>(coverage.SpatialCells),
+            "triangle_patches", static_cast<unsigned long long>(coverage.TrianglePatches),
+            "pair_tests", static_cast<unsigned long long>(audit.PairTests),
+            "broad_tests", static_cast<unsigned long long>(audit.BroadTests),
+            "coordinate_frame", "source_local_binary32"));
+        if (!displayChecks) {
+            return nullptr;
+        }
+    }
     Object result(PyDict_New()), vertices(PyList_New(mesh.Nodes.size()));
     Object triangles(PyList_New(mesh.CapTriangles.size()));
     Object implicitTriangles(PyList_New(mesh.ImplicitTriangles.size()));
     if (!result || !vertices || !triangles || !implicitTriangles) {
         return nullptr;
+    }
+    if constexpr (CheckedDisplay) {
+        if (!set(result.get(), "display_checks", displayChecks.release())
+            || !set(result.get(), "assignment_vertices", assignmentVertices.release())) {
+            return nullptr;
+        }
     }
     for (size_t i = 0; i < mesh.Nodes.size(); ++i) {
         auto* vertex = xyz(mesh.Nodes[i].XYZ());
@@ -2346,6 +2431,12 @@ PyMethodDef methods[] = {
      "tessellate_mixed(boundary_handle, tolerance=.1, maximum_cells=256, maximum_nodes=200000, "
      "maximum_triangles=400000) -> trim-conforming closed mesh candidate. One-sided "
      "triangle-to-untrimmed-field distance bound, NOT coverage, embeddedness or solid validation."},
+    {"tessellate_mixed_checked", checked<prepareMixedMesh<true, true>>, METH_VARARGS,
+     "tessellate_mixed_checked(handle, tolerance=.1, maximum_cells=256, maximum_nodes=200000, "
+     "maximum_triangles=400000, maximum_depth=14, maximum_spatial_cells=2000000, "
+     "maximum_triangle_patches=1000000, maximum_pair_tests=2000000, maximum_broad_tests=50000000) "
+     "-> same-buffer binary32 display with two-way clipped proximity and exact contact checks; "
+     "unresolved checks reject, NOT native topology/solid validation or world-placement precision."},
     {"prepare_mixed_mesh",
      checked<prepareMixedMesh<false>>,
      METH_VARARGS,

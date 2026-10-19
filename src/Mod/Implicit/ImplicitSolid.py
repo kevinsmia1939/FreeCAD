@@ -153,10 +153,14 @@ def component_triangles(mesh, domains):
     Saved domains are the exact field-face restrictions. Ambiguity or crossing
     a separator refuses the preview, never creates a guessed NativeFace index.
     This is display assignment, not surface coverage/solid validation.
+    Checked binary32 uploads retain canonical pre-upload points for this
+    assignment; the displayed displacement must stay within their checked bound.
     """
     groups = [[] for _ in domains]
+    assignment = mesh.get("assignment_vertices", mesh["vertices"])
+    upload = mesh.get("display_checks", {}).get("upload_coordinate_bound", 0.)
     for tri in mesh["implicit_triangles"]:
-        points = [mesh["vertices"][i] for i in tri]
+        points = [assignment[i] for i in tri]
         candidates = []
         for index, (low, high) in enumerate(domains):
             reserve = 64 * math.ulp(max(1., *(abs(v) for v in (*low, *high))))
@@ -164,6 +168,8 @@ def component_triangles(mesh, domains):
                 candidates.append(index)
         if len(candidates) != 1:
             raise ValueError("Display triangle is not contained in one actual native component domain")
+        if any(math.dist(assignment[i], mesh["vertices"][i]) > upload for i in tri):
+            raise ValueError("Display upload exceeds its checked displacement bound")
         groups[candidates[0]].append(tri)
     if any(not triangles for triangles in groups):
         raise ValueError("Display candidate omits an actual native field component")
@@ -190,11 +196,14 @@ class NativeSolidView(NativeBoundaryView):
                                   ("ShowBoundaryEdges", "Bool", True), ("ShowVertices", "Bool", True),
                                   ("SurfaceTolerance", "Length", .1),
                                   ("SurfaceMaximumCells", "Integer", 256),
+                                  ("CheckSurfaceDisplay", "Bool", False),
+                                  ("DisplayProximityChecked", "Bool", False),
                                   ("SurfacePreviewStatus", "String", "")):
             if name not in view.PropertiesList:
                 view.addProperty("App::Property" + kind, name, "Native solid display")
                 setattr(view, name, value)
         view.setEditorMode("SurfacePreviewStatus", 1)
+        view.setEditorMode("DisplayProximityChecked", 1)
         self._ready = True
         self.updateData(view.Object, "NativeRevision")
 
@@ -202,7 +211,7 @@ class NativeSolidView(NativeBoundaryView):
         super().onChanged(view, prop)
         if getattr(self, "_ready", False) and prop in (
                 "ShowImplicitSurface", "ShowBoundaryEdges", "ShowVertices",
-                "SurfaceTolerance", "SurfaceMaximumCells"):
+                "SurfaceTolerance", "SurfaceMaximumCells", "CheckSurfaceDisplay"):
             self.updateData(view.Object, "NativeRevision")
 
     def _face(self, root, name, points, normals, triangles):
@@ -239,10 +248,11 @@ class NativeSolidView(NativeBoundaryView):
         view = self._view
         proxy = obj.Proxy
         key = (proxy._digest, bool(view.ShowImplicitSurface), bool(view.ShowBoundaryEdges),
-               bool(view.ShowVertices), view.SurfaceTolerance.Value, view.SurfaceMaximumCells)
+               bool(view.ShowVertices), view.SurfaceTolerance.Value, view.SurfaceMaximumCells,
+               bool(view.CheckSurfaceDisplay))
         if key == self._key:
             return
-        self._key = key
+        self._key = None  # Publish a successful cache key only after scene upload.
         # Instance selections hold the target's old subelement indices too.
         # Clear only this target and its link instances, not unrelated objects.
         for selected in Gui.Selection.getSelectionEx():
@@ -251,6 +261,7 @@ class NativeSolidView(NativeBoundaryView):
         self._content.removeAllChildren()
         self._elements, self._picked = {}, {}
         self._mesh = None
+        view.DisplayProximityChecked = False
         if self._preview_key is not None and self._preview_key[0] != proxy._digest:
             self._preview_key = self._preview = None
         self._geometry = Implicit.nativeGeometry(obj) if obj.Geometry is not None else None
@@ -260,27 +271,63 @@ class NativeSolidView(NativeBoundaryView):
             return
         report, source = proxy._solid, proxy._source
         surface = None
+        checked_status = None
+        preview_failed = False
         groups = [[] for _ in report["component_domains"]]
         view.SurfacePreviewStatus = "Field display disabled; native caps/edges/vertices only"
         if view.ShowImplicitSurface and report["implicit_face_count"]:
             try:
                 import ImplicitOCCT as native
-                preview_key = (proxy._digest, view.SurfaceTolerance.Value, view.SurfaceMaximumCells)
+                preview_key = (proxy._digest, view.SurfaceTolerance.Value, view.SurfaceMaximumCells,
+                               bool(view.CheckSurfaceDisplay))
                 if preview_key != self._preview_key:
-                    surface = native.tessellate_mixed(source["boundary_handle"], view.SurfaceTolerance.Value,
-                                                     view.SurfaceMaximumCells)
+                    extract = (native.tessellate_mixed_checked if view.CheckSurfaceDisplay
+                               else native.tessellate_mixed)
+                    surface = extract(source["boundary_handle"], view.SurfaceTolerance.Value,
+                                      view.SurfaceMaximumCells)
                     groups = component_triangles(surface, report["component_domains"])
                     self._preview_key, self._preview = preview_key, (surface, groups)
                 else:
                     surface, groups = self._preview
                 self._mesh = surface
-                view.SurfacePreviewStatus = "Transient component-assigned candidate; display coverage NOT validated"
+                checks = surface.get("display_checks")
+                if view.CheckSurfaceDisplay:
+                    if not checks or not checks["boundary_proximity_resolved"] or not checks["triangle_contacts_clear"]:
+                        raise ValueError("Missing same-buffer display checks")
+                    checked_status = (
+                        "Local binary32 display: two-way proximity <= %g mm, triangle contacts clear; "
+                        "NOT topology/solid validation" % checks["distance_tolerance"])
+                    view.SurfacePreviewStatus = "Checked source-local buffers; upload pending"
+                else:
+                    view.SurfacePreviewStatus = "Transient component-assigned candidate; display coverage NOT validated"
             except Exception as error:
                 surface = None
+                self._mesh = None
+                self._key = None
+                preview_failed = True
+                checked_status = None
+                view.DisplayProximityChecked = False
                 self._preview_key = self._preview = None
                 view.SurfacePreviewStatus = "Unsupported/failed field preview: " + str(error)
         elif not report["implicit_face_count"]:
             view.SurfacePreviewStatus = "No implicit faces in actual result"
+        try:
+            self._upload_scene(report, source, surface, groups)
+        except Exception as error:
+            self._content.removeAllChildren()
+            self._elements, self._picked = {}, {}
+            self._mesh = None
+            self._preview_key = self._preview = None
+            view.SurfacePreviewStatus = "Unsupported/failed display upload: " + str(error)
+            return
+        self._key = None if preview_failed else key
+        if checked_status is not None:
+            view.DisplayProximityChecked = True
+            view.SurfacePreviewStatus = checked_status
+
+    def _upload_scene(self, report, source, surface, groups):
+        from pivy import coin
+        view = self._view
         solids, shells = [], []
         for index in range(report["solid_count"]):
             node = coin.SoSeparator()
