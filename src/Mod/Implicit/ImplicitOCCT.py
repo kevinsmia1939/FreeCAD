@@ -28,6 +28,7 @@ from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, i
                           check_mixed_correspondence, check_box_topology, check_mixed_topology,
                           check_box_region_topology, check_mixed_region_topology,
                           check_mixed_cap_attachment, check_mixed_trim_attachment,
+                          check_mixed_cap_geometry,
                           build_mixed_shells, inspect_mixed_shells, classify_mixed_shells,
                           build_mixed_solids, inspect_mixed_solids, classify_mixed_solids,
                           dumps_mixed_solids, loads_mixed_solids,

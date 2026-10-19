@@ -1555,6 +1555,56 @@ PyObject* nativeSolidReport(const BRepClass3d_ImplicitBox::NativeSolids& data)
     return result.release();
 }
 
+PyObject* checkMixedCapGeometry(PyObject* args)
+{
+    PyObject* object;
+    double tolerance = .1;
+    int depth = 16;
+    unsigned long long cells = 2000000, segments = 8000000;
+    if (!PyArg_ParseTuple(args, "O|diKK", &object, &tolerance, &depth, &cells, &segments)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!cells || cells > 10000000 || !segments || segments > 50000000) {
+        throw Standard_DomainError("Invalid native cap geometry budgets");
+    }
+    using Ops = BRepClass3d_ImplicitBox;
+    const auto& source = *static_cast<const Ops::Boundary*>(PyCapsule_GetPointer(object, boundaryName));
+    if (source.Faces.empty()) {
+        throw Standard_DomainError("Native cap geometry requires a stored boundary");
+    }
+    const std::vector<TopoDS_Face> caps(source.Faces.begin(), source.Faces.end() - 1);
+    const auto report = Ops::CheckCapGeometry(source, caps, tolerance, depth, size_t(cells), size_t(segments));
+    Object result(Py_BuildValue(
+        "{s:O,s:s,s:d,s:d,s:d,s:d,s:(KK),s:K,s:K,s:K,s:i,s:i,s:O,s:O}",
+        "cap_geometry_resolved", report.Resolved ? Py_True : Py_False,
+        "reason", report.Reason.c_str(),
+        "mathematical_to_caps_bound", report.MathematicalToCapsBound,
+        "caps_to_mathematical_bound", report.CapsToMathematicalBound,
+        "edge_vertex_deviation", report.EdgeVertexDeviation,
+        "boundary_bound", report.BoundaryBound,
+        "cells", static_cast<unsigned long long>(report.Cells[0]),
+        static_cast<unsigned long long>(report.Cells[1]),
+        "segment_tests", static_cast<unsigned long long>(report.SegmentTests),
+        "regularized_empty_cells", static_cast<unsigned long long>(report.RegularizedEmptyCells),
+        "corner_witnesses", static_cast<unsigned long long>(report.CornerWitnesses),
+        "unresolved_side", report.UnresolvedSide,
+        "unresolved_direction", report.UnresolvedDirection,
+        "solid_validated", Py_False,
+        "topology_validated", Py_False));
+    if (!result
+        || !set(result.get(), "corner_policy", PyUnicode_FromString(
+            source.Policy == Ops::CornerPolicy::Regularized ? "regularized" : "reject"))
+        || !set(result.get(), "unresolved_minimum", xyz(report.UnresolvedMinimum.XYZ()))
+        || !set(result.get(), "unresolved_maximum", xyz(report.UnresolvedMaximum.XYZ()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 PyObject* buildMixedSolids(PyObject* args)
 {
     PyObject* object;
@@ -2202,6 +2252,11 @@ PyMethodDef methods[] = {
      "maximum_cells=4000000, maximum_witness_tests=2000000) "
      "-> cap-region bijection using common F/L retained points beyond retraced seam uncertainty. "
      "Not trim-wire attachment or native-shell/solid validation."},
+    {"check_mixed_cap_geometry", checked<checkMixedCapGeometry>, METH_VARARGS,
+     "check_mixed_cap_geometry(boundary_handle, tolerance=.1, maximum_depth=16, "
+     "maximum_cells=2000000, maximum_segment_tests=8000000) -> both directed cap-region "
+     "distance bounds, lifted p-curve/edge/vertex checks and corner-regularization diagnostics. "
+     "No topology or native-solid validity promotion."},
     {"check_box_region_topology",
      checked<checkBoxTopology<false, true>>,
      METH_VARARGS,
