@@ -38,6 +38,10 @@ class MixedBoundary:
 
     @staticmethod
     def _ensure_geometry(obj):
+        if "CornerPolicy" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyEnumeration", "CornerPolicy", "Native mixed boundary")
+            obj.CornerPolicy = ["Reject", "Regularized"]
+            obj.CornerPolicy = "Reject"
         if "Geometry" not in obj.PropertiesList:
             obj.addProperty("Implicit::PropertyNativeGeometry", "Geometry", "Native geometry")
         obj.setEditorMode("Geometry", 1)
@@ -67,6 +71,10 @@ class MixedBoundary:
             "edges": sorted((type(e.Curve).__name__, vertices(e)) for e in shape.Edges),
             "faces": sorted((type(f.Surface).__name__, xyz(f.normalAt(0, 0)), vertices(f)) for f in shape.Faces),
         }
+        # Preserve the legacy Reject fingerprint, so adding this property on
+        # restore does not silently retrace unchanged saved native topology.
+        if str(getattr(obj, "CornerPolicy", "Reject")) != "Reject":
+            descriptor["corner_policy"] = str(obj.CornerPolicy).lower()
         return hashlib.sha256(json.dumps(descriptor, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
     def _display(self, obj, data):
@@ -151,6 +159,7 @@ class MixedBoundary:
                 minimum = tuple(min(p[a] for p in points) for a in range(3))
                 maximum = tuple(max(p[a] for p in points) for a in range(3))
                 if (data["period"] != field.Period.Value or data["isovalue"] != field.IsoValue
+                        or data["corner_policy"] != str(obj.CornerPolicy).lower()
                         or data["operation"] != mode or tuple(metadata["minimum"]) != minimum
                         or tuple(metadata["maximum"]) != maximum
                         or metadata["tolerance"] != obj.GeometricTolerance.Value):
@@ -161,7 +170,8 @@ class MixedBoundary:
                                      tuple(field.DomainMax), obj.GeometricTolerance.Value)
                 mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
                 data = native.mixed_box(face, box.Shape, mode,
-                                        obj.GeometricTolerance.Value, obj.MaximumCells)
+                                        obj.GeometricTolerance.Value, obj.MaximumCells,
+                                        corner_policy=str(obj.CornerPolicy).lower())
                 self._publishing = True
                 try:
                     obj.Geometry = data["boundary_handle"]
@@ -690,8 +700,11 @@ class MixedBoundaryTaskPanel:
         return True
 
 
-def create(field, box, operation="Common"):
+def create(field, box, operation="Common", corner_policy="Reject"):
     import ImplicitOCCT  # noqa: F401; ABI guard before document mutation.
+    policy = {"reject": "Reject", "regularized": "Regularized"}.get(str(corner_policy).lower())
+    if policy is None:
+        raise ValueError("Unknown native corner policy")
     if field.Document != box.Document:
         raise ValueError("Mixed operands must belong to the same document")
     document = field.Document
@@ -700,6 +713,7 @@ def create(field, box, operation="Common"):
         obj = document.addObject("Implicit::NativeFeaturePython", "NativeMixedBoundary")
         MixedBoundary(obj)
         obj.Field, obj.Box, obj.Operation = field, box, operation
+        obj.CornerPolicy = policy
         obj.Label = "Native " + operation + " (experimental caps/seams)"
         if App.GuiUp:
             MixedBoundaryView(obj.ViewObject)

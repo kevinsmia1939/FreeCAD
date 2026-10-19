@@ -953,7 +953,10 @@ PyObject* prepareMixedMesh(PyObject* args)
         }
         return result.release();
     };
-    if (!set(result.get(), "vertices", vertices.release())
+    if (!set(result.get(), "corner_policy", PyUnicode_FromString(
+            mesh.Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized ? "regularized" : "reject"))
+        || !set(result.get(), "fixed_corner_count", PyLong_FromLong(mesh.FixedCornerCount))
+        || !set(result.get(), "vertices", vertices.release())
         || !set(result.get(), "cap_triangles", triangles.release())
         || !set(result.get(), "implicit_triangles", implicitTriangles.release())
         || !set(result.get(), "seams", indices(mesh.Seams))
