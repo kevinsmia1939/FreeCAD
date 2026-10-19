@@ -1385,7 +1385,11 @@ PyObject* nativeShellReport(const BRepClass3d_ImplicitBox::NativeShells& data)
     const auto integer = [](int value) {
         return PyLong_FromLong(value);
     };
-    if (!set(result.get(), "face_sources", convertedList(data.FaceSources, integer))
+    if (!set(result.get(), "reference_resolution", PyLong_FromLong(data.ReferenceResolution))
+        || !set(result.get(), "corner_policy", PyUnicode_FromString(
+            data.Source.Policy == BRepClass3d_ImplicitBox::CornerPolicy::Regularized
+                ? "regularized" : "reject"))
+        || !set(result.get(), "face_sources", convertedList(data.FaceSources, integer))
         || !set(result.get(), "face_components", convertedList(data.FaceComponents, integer))
         || !set(result.get(), "face_shells", convertedList(data.FaceShells, integer))
         || !set(result.get(), "shell_regions", convertedList(data.ShellRegions, integer))

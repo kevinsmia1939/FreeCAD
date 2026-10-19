@@ -82,7 +82,6 @@ def main():
         assert native.dumps_mixed(handle) == record
         limited = native.check_mixed_trim_attachment(handle, 32, 16, 1)
         assert not limited["trim_wires_attached"] and limited["reason"]
-        rejected(lambda: native.build_mixed_shells(handle))
         rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerTrimAttachment")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")

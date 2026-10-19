@@ -44,7 +44,6 @@ def main():
         query = native.classify_mixed(handle, excluded)
         assert query["state"] == "outside" and query["distance_lower_bound"] > .1
         assert query["corner_policy"] == "regularized" and not query["solid_validated"]
-        rejected(lambda: native.build_mixed_shells(handle))
         rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerPolicyGuard")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")

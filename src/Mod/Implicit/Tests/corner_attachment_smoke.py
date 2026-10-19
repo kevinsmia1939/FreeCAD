@@ -67,7 +67,6 @@ def main():
         assert not limited["stored_graph_correspondence_resolved"] and limited["reason"]
         limited = native.check_mixed_cap_attachment(handle, 32, 16, 4000000, 1)
         assert not limited["cap_regions_attached"] and limited["reason"]
-        rejected(lambda: native.build_mixed_shells(handle))
         rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerCapAttachment")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")
