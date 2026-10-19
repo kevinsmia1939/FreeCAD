@@ -1059,7 +1059,7 @@ PyObject* checkMixedCoverage(PyObject* args)
         size_t(patches)
     );
     Object result(Py_BuildValue(
-        "{s:O,s:O,s:O,s:O,s:d,s:d,s:d,s:K,s:K,s:i,s:i}",
+        "{s:O,s:O,s:O,s:O,s:d,s:d,s:d,s:K,s:K,s:i,s:i,s:K,s:K,s:K,s:K}",
         "boundary_proximity_resolved",
         report.Resolved ? Py_True : Py_False,
         "topology_validated",
@@ -1081,7 +1081,15 @@ PyObject* checkMixedCoverage(PyObject* args)
         "cells",
         mesh.Cells,
         "unresolved_triangle",
-        report.UnresolvedTriangle
+        report.UnresolvedTriangle,
+        "regularized_field_cells",
+        static_cast<unsigned long long>(report.RegularizedFieldCells),
+        "regularized_cap_cells",
+        static_cast<unsigned long long>(report.RegularizedCapCells),
+        "corner_witnesses",
+        static_cast<unsigned long long>(report.CornerWitnesses),
+        "exclusion_slab_rejections",
+        static_cast<unsigned long long>(report.ExclusionSlabRejections)
     ));
     if (!result || !set(result.get(), "unresolved_minimum", xyz(report.UnresolvedMinimum.XYZ()))
         || !set(result.get(), "unresolved_maximum", xyz(report.UnresolvedMaximum.XYZ()))) {
