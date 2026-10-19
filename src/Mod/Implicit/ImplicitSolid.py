@@ -27,6 +27,7 @@ class NativeSolid:
             obj.addProperty("App::Property" + kind, name, "Native solid")
             if value is not None:
                 setattr(obj, name, value)
+        self._ensure_settings(obj)
         for name in ("SolidSchema", "SolidCount", "ShellCount", "NativeFaceCount",
                      "SolidValidated", "BackendStatus", "Geometry"):
             obj.setEditorMode(name, 1)
@@ -35,6 +36,13 @@ class NativeSolid:
         self.loads(None)
         self._restoring = False
         obj.Proxy = self
+
+    @staticmethod
+    def _ensure_settings(obj):
+        if "MaximumGeometryDepth" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyInteger", "MaximumGeometryDepth", "Native solid",
+                            "Independent cap geometry depth: -1 inherits MaximumDepth; otherwise 1 to 24")
+            obj.MaximumGeometryDepth = -1
 
     @staticmethod
     def _inputs(obj):
@@ -47,10 +55,18 @@ class NativeSolid:
             raise ValueError("Source must be a valid native mixed-boundary owner, not a Part shape/solid/link")
         if obj.SolidSchema != 1:
             raise ValueError("Unsupported native solid feature schema")
+        NativeSolid._ensure_settings(obj)
+        geometry_depth = obj.MaximumGeometryDepth
+        if geometry_depth != -1 and not 1 <= geometry_depth <= 24:
+            raise ValueError("MaximumGeometryDepth must be -1 (inherit) or 1 to 24")
         record = native.dumps_mixed(source.Geometry)
         settings = (obj.GeometricTolerance.Value, obj.TopologyResolution, obj.MaximumDepth,
                     obj.MaximumCells, obj.MaximumTests, obj.MaximumSeparatorCells,
                     obj.MaximumGeometryCells, obj.MaximumSegmentTests)
+        # Keep old schema-1 fingerprints and the original call prefix intact.
+        # Only a non-default independent setting extends the descriptor/call.
+        if geometry_depth != -1:
+            settings += (geometry_depth,)
         descriptor = (hashlib.sha256(record.encode()).hexdigest(), settings)
         fingerprint = hashlib.sha256(json.dumps(descriptor, allow_nan=False).encode()).hexdigest()
         return record, settings, fingerprint
@@ -118,6 +134,7 @@ class NativeSolid:
             raise
 
     def onDocumentRestored(self, obj):
+        self._ensure_settings(obj)
         self._restoring = False
         self._restore_failed = obj.Geometry is None and bool(obj.InputFingerprint)
         self._refresh(obj)
@@ -182,6 +199,7 @@ from ImplicitNative import NativeBoundaryView
 class NativeSolidView(NativeBoundaryView):
     def attach(self, view):
         self._ready = False
+        self._task = None
         self._view = view
         self._key = None
         self._elements, self._picked = {}, {}
@@ -397,6 +415,28 @@ class NativeSolidView(NativeBoundaryView):
     def getElementPicked(self, picked):
         return self._picked.get(picked.getPath().getTail().getNodeId())
 
+    def doubleClicked(self, view):
+        import FreeCADGui as Gui
+        if Gui.Control.activeDialog() or App.getActiveTransaction():
+            return False
+        return Gui.getDocument(view.Object.Document.Name).setEdit(view.Object.Name)
+
+    def setEdit(self, view, mode):
+        import FreeCADGui as Gui
+        if mode != 0 or self._task is not None or Gui.Control.activeDialog() or App.getActiveTransaction():
+            return False
+        self._task = NativeSolidTaskPanel(view.Object)
+        Gui.Control.showDialog(self._task, Gui.getDocument(view.Object.Document.Name))
+        Gui.Control.showTaskView()
+        return True
+
+    def unsetEdit(self, view, _mode):
+        import FreeCADGui as Gui
+        task, self._task = self._task, None
+        if task is not None and not task.closed:
+            task.finish(False, reset_edit=False)
+        Gui.Control.closeDialog(Gui.getDocument(view.Object.Document.Name))
+
     def getDetailPath(self, name, path, append):
         if self._geometry is None:
             return False
@@ -424,7 +464,124 @@ class NativeSolidView(NativeBoundaryView):
         return True
 
 
-def create(source, tolerance=.1, topology_resolution=32):
+from ImplicitMixed import MixedBoundary, MixedBoundaryTaskPanel
+
+
+class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
+    """Reuse owned transaction/button lifecycle, with solid-specific controls."""
+    def __init__(self, obj):
+        from PySide import QtCore, QtWidgets
+        NativeSolid._ensure_settings(obj)
+        self.obj = obj
+        self.document_name = obj.Document.Name
+        self.transaction = 0
+        self.closed = False
+        self.source = obj.Source
+        self.edit_operation = (self.source is not None and self.source.Document == obj.Document
+                               and isinstance(getattr(self.source, "Proxy", None), MixedBoundary))
+        self.form = QtWidgets.QWidget()
+        self.form.setObjectName("ImplicitNativeSolidEditor")
+        self.form.setWindowTitle("Edit native implicit solid")
+        layout = QtWidgets.QFormLayout(self.form)
+        label = QtWidgets.QLabel(self.source.Label if self.source else "Missing source")
+        label.setTextFormat(QtCore.Qt.PlainText)
+        layout.addRow("Source", label)
+        self.operation = QtWidgets.QComboBox()
+        self.operation.addItems(["Common", "BoxMinusField"])
+        if self.edit_operation:
+            self.operation.setCurrentText(str(self.source.Operation))
+        else:
+            self.operation.clear()
+            self.operation.addItem("Stored source (read-only)")
+        self.operation.setEnabled(self.edit_operation)
+        layout.addRow("Shared source operation", self.operation)
+        self.tolerance = QtWidgets.QDoubleSpinBox()
+        self.tolerance.setDecimals(6)
+        self.tolerance.setRange(.000001, 1000000)
+        self.tolerance.setSuffix(" mm")
+        self.tolerance.setValue(obj.GeometricTolerance.Value)
+        layout.addRow("Solid tolerance", self.tolerance)
+        self.resolution = QtWidgets.QComboBox()
+        self.resolution.addItems(["4", "8", "16", "32", "64"])
+        if str(obj.TopologyResolution) not in [self.resolution.itemText(i)
+                                               for i in range(self.resolution.count())]:
+            self.resolution.addItem(str(obj.TopologyResolution))
+        self.resolution.setCurrentText(str(obj.TopologyResolution))
+        layout.addRow("Topology reference resolution", self.resolution)
+        self.controls = {}
+        for name, title, low, high in (
+                ("MaximumDepth", "Topology depth", 0, 16),
+                ("MaximumGeometryDepth", "Geometry depth (-1 inherits)", -1, 24),
+                ("MaximumCells", "Topology cell budget", 1, 10000000),
+                ("MaximumTests", "Attachment test budget", 1, 10000000),
+                ("MaximumSeparatorCells", "Separator cell budget", 1, 10000000),
+                ("MaximumGeometryCells", "Geometry cell budget", 1, 10000000),
+                ("MaximumSegmentTests", "Geometry segment budget", 1, 50000000)):
+            widget = QtWidgets.QSpinBox()
+            widget.setRange(low, high)
+            widget.setValue(getattr(obj, name))
+            self.controls[name] = widget
+            layout.addRow(title, widget)
+        self.follow = QtWidgets.QCheckBox()
+        self.follow.setChecked(obj.FollowSourcePlacement)
+        layout.addRow("Follow source placement", self.follow)
+        note = QtWidgets.QLabel(
+            "Apply previews one owned transaction; Cancel restores it. Changing the source "
+            "operation affects every object using that source. Geometry depth does not relax "
+            "the physical tolerance. Display checks are separate and synchronous. "
+            "This is a restricted native solid, not a Part shape.")
+        note.setWordWrap(True)
+        layout.addRow(note)
+        self.status = QtWidgets.QLabel(obj.BackendStatus)
+        self.status.setTextFormat(QtCore.Qt.PlainText)
+        self.status.setWordWrap(True)
+        layout.addRow(self.status)
+
+    def apply(self):
+        if self.closed:
+            return False
+        try:
+            doc = App.getDocument(self.document_name)
+            if doc is None or self.obj.Document != doc:
+                raise RuntimeError("The edited document is no longer available")
+            if self.obj.Source != self.source:
+                raise RuntimeError("Source changed; cancel and reopen the editor")
+            resolution = int(self.resolution.currentText())
+            if resolution < 4 or resolution > 64 or resolution & (resolution - 1):
+                raise ValueError("Topology resolution must be a power of two from 4 to 64")
+            values = {name: widget.value() for name, widget in self.controls.items()}
+            if values["MaximumGeometryDepth"] == 0:
+                raise ValueError("Geometry depth must be -1 (inherit) or 1 to 24")
+            active = App.getActiveTransaction()
+            if self.transaction:
+                if not active or active[1] != self.transaction:
+                    raise RuntimeError("Edit transaction changed; cancel and reopen the editor")
+            elif active:
+                raise RuntimeError("Finish the existing transaction before applying native edits")
+            else:
+                self.transaction = App.setActiveTransaction("Edit native implicit solid", True)
+            if self.edit_operation and str(self.source.Operation) != self.operation.currentText():
+                self.source.Operation = self.operation.currentText()
+                self.source.Proxy.execute(self.source)
+            self.obj.GeometricTolerance = self.tolerance.value()
+            self.obj.TopologyResolution = resolution
+            self.obj.FollowSourcePlacement = self.follow.isChecked()
+            for name, value in values.items():
+                setattr(self.obj, name, value)
+            # Catch failed previews before C++ document recompute logs an error;
+            # normal recompute then reuses the checked snapshot/dependency data.
+            self.obj.Proxy.execute(self.obj)
+            doc.recompute()
+            if not self.obj.isValid() or self.obj.Geometry is None:
+                raise RuntimeError(self.obj.BackendStatus)
+            self.status.setText(self.obj.BackendStatus)
+            return True
+        except Exception as error:
+            self.status.setText("Preview failed: " + str(error))
+            return False
+
+
+def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1):
     import ImplicitOCCT  # ABI guard before document mutation.
     if App.getActiveTransaction():
         raise RuntimeError("Finish the active transaction before creating a native solid")
@@ -436,7 +593,12 @@ def create(source, tolerance=.1, topology_resolution=32):
         obj.Source = source
         obj.GeometricTolerance = tolerance
         obj.TopologyResolution = topology_resolution
+        obj.MaximumGeometryDepth = maximum_geometry_depth
         obj.Label = "Native implicit solid (experimental)"
+        try:
+            obj.Proxy.execute(obj)
+        except Exception as error:
+            raise RuntimeError(obj.BackendStatus) from error
         document.recompute()
         if not obj.isValid() or obj.Geometry is None:
             raise RuntimeError(obj.BackendStatus)
