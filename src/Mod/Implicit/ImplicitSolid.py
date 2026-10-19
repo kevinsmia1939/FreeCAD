@@ -479,12 +479,15 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
         self.source = obj.Source
         self.edit_operation = (self.source is not None and self.source.Document == obj.Document
                                and isinstance(getattr(self.source, "Proxy", None), MixedBoundary))
+        # TaskPanel already supplies a scroll area: avoid nested scrolling.
         self.form = QtWidgets.QWidget()
         self.form.setObjectName("ImplicitNativeSolidEditor")
         self.form.setWindowTitle("Edit native implicit solid")
         layout = QtWidgets.QFormLayout(self.form)
+        layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapAllRows)
         label = QtWidgets.QLabel(self.source.Label if self.source else "Missing source")
         label.setTextFormat(QtCore.Qt.PlainText)
+        label.setWordWrap(True)
         layout.addRow("Source", label)
         self.operation = QtWidgets.QComboBox()
         self.operation.addItems(["Common", "BoxMinusField"])

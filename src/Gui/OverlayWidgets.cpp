@@ -1708,6 +1708,36 @@ void OverlayTabWidget::setRect(QRect rect)
         rect.setHeight(OverlayParams::getDockOverlayMinimumSize() * 3);
     }
 
+    // A task can have a larger minimum than the restored overlay rectangle.
+    // Qt expands the child dock in that case, but without expanding/reanchoring
+    // its overlay, essential action buttons get clipped outside the viewport.
+    // Only active task overlays override the user's narrow/collapsed sizes.
+    if (Control().activeDialog()) {
+        for (int i = 0; i < splitter->count(); ++i) {
+            if (!splitter->widget(i)->findChild<TaskView::TaskView*>()) {
+                continue;
+            }
+            const int right = rect.right();
+            const int bottom = rect.bottom();
+            const int chrome = widgetMinSize(this, true);
+            rect.setSize(rect.size().expandedTo(
+                splitter->minimumSizeHint() + QSize(chrome, chrome)));
+            if (dockArea == Qt::RightDockWidgetArea) {
+                rect.moveRight(right);
+            }
+            if (dockArea != Qt::TopDockWidgetArea) {
+                rect.moveBottom(bottom);
+            }
+            if (rect.left() < 0) {
+                rect.moveLeft(0);
+            }
+            if (rect.top() < 0) {
+                rect.moveTop(0);
+            }
+            break;
+        }
+    }
+
     switch (dockArea) {
         case Qt::LeftDockWidgetArea:
             rect.moveLeft(0);

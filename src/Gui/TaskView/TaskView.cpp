@@ -427,6 +427,8 @@ void TaskView::adjustMinimumSizeHint()
 {
     QSize ms = minimumSizeHint();
     setMinimumWidth(ms.width());
+    // Re-evaluate overlay rectangles after their delayed task minimum changes.
+    OverlayManager::instance()->refresh();
 }
 
 QSize TaskView::minimumSizeHint() const

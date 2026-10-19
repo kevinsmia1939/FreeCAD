@@ -18,14 +18,18 @@ def edit(obj):
     return task
 
 
-def click(button):
+def click(button, press=True):
     # Task overlays expand asynchronously. Wait for actual visible controls,
     # rather than invoking hidden buttons or assuming one processEvents is enough.
     for _ in range(40):
         Gui.updateGui()
         boxes = [box for box in Gui.getMainWindow().findChildren(QtWidgets.QDialogButtonBox)
-                 if box.isVisible() and box.button(button) is not None]
-        if boxes:
+                 if box.isVisible() and box.button(button) is not None
+                 and all(Gui.getMainWindow().rect().contains(QtCore.QRect(
+                     child.mapTo(Gui.getMainWindow(), QtCore.QPoint()), child.size()))
+                         and child.visibleRegion().contains(child.rect())
+                         for child in box.buttons())]
+        if len(boxes) == 1:
             break
         loop = QtCore.QEventLoop()
         QtCore.QTimer.singleShot(50, loop.quit)
@@ -42,7 +46,8 @@ def click(button):
                 widget = widget.parentWidget()
             ancestry.append(chain)
     assert len(boxes) == 1, ancestry
-    boxes[0].button(button).click()
+    if press:
+        boxes[0].button(button).click()
     Gui.updateGui()
 
 
@@ -88,6 +93,14 @@ def main():
     assert str(source.Operation) == "Common" and obj.MaximumGeometryDepth == -1
     click(QtWidgets.QDialogButtonBox.Apply)
     check(obj, "BoxMinusField", 18)
+    target = task.controls["MaximumGeometryDepth"]
+    ancestor = target.parentWidget()
+    while ancestor is not None:
+        if isinstance(ancestor, QtWidgets.QScrollArea):
+            ancestor.ensureWidgetVisible(target, 0, 2)
+        ancestor = ancestor.parentWidget()
+    click(QtWidgets.QDialogButtonBox.Apply, press=False)
+    assert target.visibleRegion().contains(target.rect())
     Gui.getMainWindow().grab().save("/tmp/implicit-solid-editor.png")
     assert App.getActiveTransaction()[1] == task.transaction
     click(QtWidgets.QDialogButtonBox.Cancel)
