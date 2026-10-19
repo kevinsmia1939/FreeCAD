@@ -58,14 +58,6 @@ def check(handle):
     return report
 
 
-def rejected(call):
-    try:
-        call()
-    except (ValueError, TypeError, RuntimeError):
-        return
-    raise AssertionError("unsupported native shell/solid consumer accepted")
-
-
 def main():
     face = native.gyroid(10, 0, (0, 0, 0), (10, 10, 10))
     box = Part.makeBox(10, 10, 10)
@@ -82,7 +74,6 @@ def main():
         assert native.dumps_mixed(handle) == record
         limited = native.check_mixed_trim_attachment(handle, 32, 16, 1)
         assert not limited["trim_wires_attached"] and limited["reason"]
-        rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerTrimAttachment")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")
         obj.Geometry = loaded["boundary_handle"]

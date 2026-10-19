@@ -1538,6 +1538,8 @@ PyObject* nativeSolidReport(const BRepClass3d_ImplicitBox::NativeSolids& data)
         "unresolved_side", geometry.UnresolvedSide,
         "unresolved_direction", geometry.UnresolvedDirection));
     if (!report
+        || !set(report.get(), "regularized_empty_cells", PyLong_FromSize_t(geometry.RegularizedEmptyCells))
+        || !set(report.get(), "corner_witnesses", PyLong_FromSize_t(geometry.CornerWitnesses))
         || !set(report.get(), "unresolved_minimum", xyz(geometry.UnresolvedMinimum.XYZ()))
         || !set(report.get(), "unresolved_maximum", xyz(geometry.UnresolvedMaximum.XYZ()))
         || !set(result.get(), "geometry", report.release())
@@ -1609,11 +1611,11 @@ PyObject* buildMixedSolids(PyObject* args)
 {
     PyObject* object;
     double tolerance = .1;
-    int resolution = 32, depth = 16;
+    int resolution = 32, depth = 16, geometryDepth = -1;
     unsigned long long cells = 4000000, tests = 2000000, separators = 2000000,
                        geometryCells = 2000000, segments = 8000000;
-    if (!PyArg_ParseTuple(args, "O|diiKKKKK", &object, &tolerance, &resolution, &depth,
-                          &cells, &tests, &separators, &geometryCells, &segments)) {
+    if (!PyArg_ParseTuple(args, "O|diiKKKKKi", &object, &tolerance, &resolution, &depth,
+                          &cells, &tests, &separators, &geometryCells, &segments, &geometryDepth)) {
         return nullptr;
     }
     if (!PyCapsule_IsValid(object, boundaryName)) {
@@ -1629,7 +1631,8 @@ PyObject* buildMixedSolids(PyObject* args)
         PyCapsule_GetPointer(object, boundaryName));
     auto data = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>(
         BRepClass3d_ImplicitBox::BuildNativeSolids(*source, tolerance, resolution, depth,
-            size_t(cells), size_t(tests), size_t(separators), size_t(geometryCells), size_t(segments)));
+            size_t(cells), size_t(tests), size_t(separators), size_t(geometryCells), size_t(segments),
+            geometryDepth == -1 ? depth : geometryDepth));
     Object result(nativeSolidReport(*data));
     if (!result) {
         return nullptr;
@@ -2213,7 +2216,8 @@ PyMethodDef methods[] = {
     {"build_mixed_solids", checked<buildMixedSolids>, METH_VARARGS,
      "build_mixed_solids(boundary_handle, tolerance=.1, resolution=32, maximum_depth=16, "
      "maximum_cells=4000000, maximum_tests=2000000, maximum_separator_cells=2000000, "
-     "maximum_geometry_cells=2000000, maximum_segment_tests=8000000) -> restricted native "
+     "maximum_geometry_cells=2000000, maximum_segment_tests=8000000, maximum_geometry_depth=-1) "
+     "(-1 inherits reference depth) -> restricted native "
      "solids gated by numerical topology and whole-boundary geometry checks; NOT Part shapes."},
     {"inspect_mixed_solids", checked<inspectMixedSolids>, METH_VARARGS,
      "inspect_mixed_solids(solid_handle) -> owned native solid diagnostics and field faces."},

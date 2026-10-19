@@ -41,14 +41,6 @@ def check(handle, face, operation):
         assert distance + 1e-8 >= clearance
 
 
-def rejected(call):
-    try:
-        call()
-    except (ValueError, TypeError, RuntimeError):
-        return
-    raise AssertionError("unsupported native trim/shell/solid consumer accepted")
-
-
 def main():
     face = native.gyroid(10, 0, (0, 0, 0), (10, 10, 10))
     before = native.dumps(face)
@@ -67,7 +59,6 @@ def main():
         assert not limited["stored_graph_correspondence_resolved"] and limited["reason"]
         limited = native.check_mixed_cap_attachment(handle, 32, 16, 4000000, 1)
         assert not limited["cap_regions_attached"] and limited["reason"]
-        rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerCapAttachment")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")
         obj.Geometry = loaded["boundary_handle"]

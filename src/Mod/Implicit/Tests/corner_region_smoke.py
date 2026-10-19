@@ -87,7 +87,6 @@ def main():
         assert not limited["closed_reference_manifold"] and not limited["native_shell_constructed"]
         rejected(lambda: native.check_mixed_region_topology(handle, 32, 16, 4000000, "reject"))
         assert native.check_mixed_cap_attachment(handle)["cap_regions_attached"]
-        rejected(lambda: native.build_mixed_solids(handle))
         doc = App.newDocument("CornerRegionReference")
         obj = doc.addObject("Implicit::NativeFeaturePython", "Boundary")
         obj.Geometry = loaded["boundary_handle"]

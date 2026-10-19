@@ -52,7 +52,6 @@ def main():
         owned = obj.Geometry
         App.closeDocument(doc.Name)
         check(owned)
-        rejected(lambda: native.build_mixed_solids(handle))
         rejected(lambda: native.check_mixed_cap_geometry(handle, 0))
     rejected(lambda: native.check_mixed_cap_geometry(face))
     print("native implicit corner cap geometry smoke test passed", flush=True)

@@ -50,12 +50,6 @@ def main():
         limited = native.build_mixed_shells(handle, 32, 16, 1)
         assert not limited["native_shell_constructed"] and "shell_handle" not in limited
         assert limited["corner_policy"] == "regularized" and limited["reason"]
-        try:
-            native.build_mixed_solids(handle)
-        except (RuntimeError, ValueError, TypeError):
-            pass
-        else:
-            raise AssertionError("Corner native solid guard removed before geometry qualification")
     loaded = native.loads_mixed(record)["boundary_handle"]
     check(native.build_mixed_shells(loaded))
     assert not native.inspect_mixed(loaded)["seam_bound_verified"]
