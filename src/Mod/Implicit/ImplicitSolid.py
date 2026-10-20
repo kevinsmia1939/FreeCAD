@@ -498,11 +498,41 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             self.operation.addItem("Stored source (read-only)")
         self.operation.setEnabled(self.edit_operation)
         layout.addRow("Shared source operation", self.operation)
+        from ImplicitSourceEdit import SourceEdits, driven
+        self.source_edits = None
+        self.parameters = {}
+        try:
+            self.source_edits = SourceEdits(obj)
+        except ValueError as error:
+            info = QtWidgets.QLabel("Input parameter editing unavailable: " + str(error))
+            info.setWordWrap(True)
+            layout.addRow(info)
+        if self.source_edits is not None:
+            current = self.source_edits.values()
+            for name in self.source_edits.names:
+                widget = QtWidgets.QDoubleSpinBox()
+                widget.setDecimals(6)
+                widget.setRange(-1000000 if name == "IsoValue" else .000001, 1000000)
+                if name != "IsoValue":
+                    widget.setSuffix(" mm")
+                widget.setValue(current[name])
+                widget._initial_numeric, widget._initial_shown = current[name], widget.value()
+                target = self.source_edits.field if name in ("Period", "IsoValue") else self.source_edits.box
+                widget.setEnabled(not driven(target, name) and (
+                    name in ("Period", "IsoValue") or self.source_edits.parametric_box))
+                self.parameters[name] = widget
+                layout.addRow("Shared input " + name, widget)
+            self.fit_domain = QtWidgets.QCheckBox()
+            self.fit_domain.setEnabled(self.source_edits.domain_mode() is not None)
+            self.fit_domain.setChecked(self.source_edits.follows_box())
+            layout.addRow("Fit shared field domain to box", self.fit_domain)
         self.tolerance = QtWidgets.QDoubleSpinBox()
         self.tolerance.setDecimals(6)
         self.tolerance.setRange(.000001, 1000000)
         self.tolerance.setSuffix(" mm")
         self.tolerance.setValue(obj.GeometricTolerance.Value)
+        self.tolerance._initial_numeric = obj.GeometricTolerance.Value
+        self.tolerance._initial_shown = self.tolerance.value()
         layout.addRow("Solid tolerance", self.tolerance)
         self.resolution = QtWidgets.QComboBox()
         self.resolution.addItems(["4", "8", "16", "32", "64"])
@@ -530,7 +560,8 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
         layout.addRow("Follow source placement", self.follow)
         note = QtWidgets.QLabel(
             "Apply previews one owned transaction; Cancel restores it. Changing the source "
-            "operation affects every object using that source. Geometry depth does not relax "
+            "operation or input parameters affects all linked native results. Existing custom "
+            "expressions are never replaced; cross-document input edits are unsupported. Geometry depth does not relax "
             "the physical tolerance. Display checks are separate and synchronous. "
             "This is a restricted native solid, not a Part shape.")
         note.setWordWrap(True)
@@ -543,6 +574,7 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
     def apply(self):
         if self.closed:
             return False
+        editing_started = False
         try:
             doc = App.getDocument(self.document_name)
             if doc is None or self.obj.Document != doc:
@@ -555,6 +587,10 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             values = {name: widget.value() for name, widget in self.controls.items()}
             if values["MaximumGeometryDepth"] == 0:
                 raise ValueError("Geometry depth must be -1 (inherit) or 1 to 24")
+            def number(widget):
+                return widget._initial_numeric if widget.value() == widget._initial_shown else widget.value()
+            plan = (self.source_edits.prepare({name: number(widget) for name, widget in self.parameters.items()},
+                                             self.fit_domain.isChecked()) if self.source_edits else None)
             active = App.getActiveTransaction()
             if self.transaction:
                 if not active or active[1] != self.transaction:
@@ -563,17 +599,26 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
                 raise RuntimeError("Finish the existing transaction before applying native edits")
             else:
                 self.transaction = App.setActiveTransaction("Edit native implicit solid", True)
+            editing_started = True
+            from ImplicitSourceEdit import invalidate, rebuild
+            affected = self.source_edits.apply(plan, self.transaction) if plan else []
             if self.edit_operation and str(self.source.Operation) != self.operation.currentText():
+                if self.source not in affected:
+                    invalidate([self.source])
+                    affected.append(self.source)
                 self.source.Operation = self.operation.currentText()
-                self.source.Proxy.execute(self.source)
-            self.obj.GeometricTolerance = self.tolerance.value()
+            self.obj.GeometricTolerance = number(self.tolerance)
             self.obj.TopologyResolution = resolution
             self.obj.FollowSourcePlacement = self.follow.isChecked()
             for name, value in values.items():
                 setattr(self.obj, name, value)
             # Catch failed previews before C++ document recompute logs an error;
             # normal recompute then reuses the checked snapshot/dependency data.
-            self.obj.Proxy.execute(self.obj)
+            if self.edit_operation and self.source not in affected:
+                affected.append(self.source)
+            rebuild(affected)
+            if self.source not in affected:
+                self.obj.Proxy.execute(self.obj)
             doc.recompute()
             if not self.obj.isValid() or self.obj.Geometry is None:
                 raise RuntimeError(self.obj.BackendStatus)
@@ -582,6 +627,9 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
         except Exception as error:
             self.status.setText("Preview failed: " + str(error))
             return False
+        finally:
+            if editing_started and self.source_edits is not None:
+                self.source_edits.remember()
 
 
 def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1):
