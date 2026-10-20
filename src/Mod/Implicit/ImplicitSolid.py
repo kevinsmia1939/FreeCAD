@@ -8,6 +8,32 @@ import FreeCAD as App
 import Implicit
 
 
+# Property name, task label, minimum, maximum, initial value. Keep creation and
+# editing on the same limits; independent geometry depth additionally excludes 0.
+BUILD_LIMITS = (
+    ("MaximumDepth", "Topology depth", 0, 16, 16),
+    ("MaximumGeometryDepth", "Geometry depth (-1 inherits)", -1, 24, -1),
+    ("MaximumCells", "Topology cell budget", 1, 10000000, 4000000),
+    ("MaximumTests", "Attachment test budget", 1, 10000000, 2000000),
+    ("MaximumSeparatorCells", "Separator cell budget", 1, 10000000, 2000000),
+    ("MaximumGeometryCells", "Geometry cell budget", 1, 10000000, 2000000),
+    ("MaximumSegmentTests", "Geometry segment budget", 1, 50000000, 8000000),
+)
+
+
+def build_limit_controls(layout, values=None):
+    from PySide import QtWidgets
+    values = values or {}
+    controls = {}
+    for name, title, low, high, default in BUILD_LIMITS:
+        widget = QtWidgets.QSpinBox()
+        widget.setRange(low, high)
+        widget.setValue(values.get(name, default))
+        controls[name] = widget
+        layout.addRow(title, widget)
+    return controls
+
+
 class NativeSolid:
     def __init__(self, obj):
         for name, kind, value in (
@@ -15,10 +41,8 @@ class NativeSolid:
                 # adopt/move its source and that source's Boolean operands.
                 ("SolidSchema", "Integer", 1), ("Source", "LinkGlobal", None),
                 ("GeometricTolerance", "Length", .1), ("TopologyResolution", "Integer", 32),
-                ("MaximumDepth", "Integer", 16), ("MaximumCells", "Integer", 4000000),
-                ("MaximumTests", "Integer", 2000000), ("MaximumSeparatorCells", "Integer", 2000000),
-                ("MaximumGeometryCells", "Integer", 2000000),
-                ("MaximumSegmentTests", "Integer", 8000000),
+        ) + tuple((name, "Integer", default) for name, _, _, _, default in BUILD_LIMITS
+                  if name != "MaximumGeometryDepth") + (
                 ("FollowSourcePlacement", "Bool", True),
                 ("SolidCount", "Integer", 0), ("ShellCount", "Integer", 0),
                 ("NativeFaceCount", "Integer", 0), ("SolidValidated", "Bool", False),
@@ -45,21 +69,25 @@ class NativeSolid:
             obj.MaximumGeometryDepth = -1
 
     @staticmethod
-    def _inputs(obj):
+    def _boundary_record(source):
         import ImplicitOCCT as native
-        source = obj.Source
-        if (source is None or source == obj or not source.isValid()
+        if (source is None or not source.isValid()
                 or source.isDerivedFrom("App::Link")
+                or "Geometry" not in source.PropertiesList
                 or source.getTypeIdOfProperty("Geometry") != "Implicit::PropertyNativeGeometry"
                 or source.Geometry is None):
             raise ValueError("Source must be a valid native mixed-boundary owner, not a Part shape/solid/link")
+        return native.dumps_mixed(source.Geometry)
+
+    @staticmethod
+    def _inputs(obj):
+        record = NativeSolid._boundary_record(obj.Source)
         if obj.SolidSchema != 1:
             raise ValueError("Unsupported native solid feature schema")
         NativeSolid._ensure_settings(obj)
         geometry_depth = obj.MaximumGeometryDepth
         if geometry_depth != -1 and not 1 <= geometry_depth <= 24:
             raise ValueError("MaximumGeometryDepth must be -1 (inherit) or 1 to 24")
-        record = native.dumps_mixed(source.Geometry)
         settings = (obj.GeometricTolerance.Value, obj.TopologyResolution, obj.MaximumDepth,
                     obj.MaximumCells, obj.MaximumTests, obj.MaximumSeparatorCells,
                     obj.MaximumGeometryCells, obj.MaximumSegmentTests)
@@ -541,20 +569,7 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             self.resolution.addItem(str(obj.TopologyResolution))
         self.resolution.setCurrentText(str(obj.TopologyResolution))
         layout.addRow("Topology reference resolution", self.resolution)
-        self.controls = {}
-        for name, title, low, high in (
-                ("MaximumDepth", "Topology depth", 0, 16),
-                ("MaximumGeometryDepth", "Geometry depth (-1 inherits)", -1, 24),
-                ("MaximumCells", "Topology cell budget", 1, 10000000),
-                ("MaximumTests", "Attachment test budget", 1, 10000000),
-                ("MaximumSeparatorCells", "Separator cell budget", 1, 10000000),
-                ("MaximumGeometryCells", "Geometry cell budget", 1, 10000000),
-                ("MaximumSegmentTests", "Geometry segment budget", 1, 50000000)):
-            widget = QtWidgets.QSpinBox()
-            widget.setRange(low, high)
-            widget.setValue(getattr(obj, name))
-            self.controls[name] = widget
-            layout.addRow(title, widget)
+        self.controls = build_limit_controls(layout, {name: getattr(obj, name) for name, *_ in BUILD_LIMITS})
         self.follow = QtWidgets.QCheckBox()
         self.follow.setChecked(obj.FollowSourcePlacement)
         layout.addRow("Follow source placement", self.follow)
@@ -632,10 +647,21 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
                 self.source_edits.remember()
 
 
-def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1):
+def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1,
+           *, build_limits=None, hide_source=False):
     import ImplicitOCCT  # ABI guard before document mutation.
     if App.getActiveTransaction():
         raise RuntimeError("Finish the active transaction before creating a native solid")
+    limits = dict(build_limits or {})
+    allowed = {name: (low, high) for name, _, low, high, _ in BUILD_LIMITS
+               if name != "MaximumGeometryDepth"}
+    for name, value in limits.items():
+        if name not in allowed:
+            raise ValueError("Unknown native solid build limit: " + str(name))
+        low, high = allowed[name]
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(name + " must be an integer from %d to %d" % (low, high))
+    NativeSolid._boundary_record(source)
     document = source.Document
     document.openTransaction("Create live native implicit solid")
     try:
@@ -645,6 +671,8 @@ def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=
         obj.GeometricTolerance = tolerance
         obj.TopologyResolution = topology_resolution
         obj.MaximumGeometryDepth = maximum_geometry_depth
+        for name, value in limits.items():
+            setattr(obj, name, value)
         obj.Label = "Native implicit solid (experimental)"
         try:
             obj.Proxy.execute(obj)
@@ -655,6 +683,8 @@ def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=
             raise RuntimeError(obj.BackendStatus)
         if App.GuiUp:
             NativeSolidView(obj.ViewObject)
+            if hide_source:
+                source.ViewObject.Visibility = False
         document.commitTransaction()
         return obj
     except BaseException:
@@ -667,7 +697,8 @@ def selected():
     objects = Gui.Selection.getSelection()
     if len(objects) != 1:
         raise ValueError("Select one native mixed-boundary object")
-    return create(objects[0])
+    from ImplicitSolidCreate import open_task
+    return open_task(objects[0])
 
 
 def demo():
