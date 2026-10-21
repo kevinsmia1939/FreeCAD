@@ -3,6 +3,7 @@
 import os
 import tempfile
 import traceback
+import time
 import FreeCAD as App
 import FreeCADGui as Gui
 import ImplicitMixed
@@ -10,6 +11,27 @@ import ImplicitSolid
 import ImplicitSolidCreate
 import ImplicitOCCT as native
 from PySide import QtCore, QtWidgets
+
+
+def finish(task):
+    deadline = time.monotonic() + 120
+    pulses = 0
+    while task.job is not None:
+        assert time.monotonic() < deadline, task.status.text()
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
+        pulses += 1
+    return pulses
+
+
+def cancelled(job):
+    deadline = time.monotonic() + 10
+    while native.solid_job_status(job)["state"] != "cancelled":
+        assert time.monotonic() < deadline, native.solid_job_status(job)
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(10, loop.quit)
+        loop.exec()
 
 
 def click(button):
@@ -32,6 +54,7 @@ def click(button):
 
 
 def main():
+    Gui.getMainWindow().showMaximized()
     Gui.activateWorkbench("ImplicitModelingWorkbench")
     doc = App.newDocument("NativeSolidCreationGUI")
     doc.UndoMode = 1
@@ -89,6 +112,36 @@ def main():
         raise AssertionError("creation adopted an unrelated transaction")
     assert App.getActiveTransaction() == active
     doc.abortTransaction()
+    task = ImplicitSolidCreate.open_task(source)
+    click(QtWidgets.QDialogButtonBox.Ok)
+    job = task.job
+    assert job is not None and len(doc.Objects) == count
+    click(QtWidgets.QDialogButtonBox.Cancel)
+    cancelled(job)
+    assert not Gui.Control.activeDialog() and task.result is None
+    assert len(doc.Objects) == count and source.ViewObject.Visibility
+
+    task = ImplicitSolidCreate.open_task(source)
+    click(QtWidgets.QDialogButtonBox.Ok)
+    task.controls["MaximumGeometryDepth"].setValue(18)
+    finish(task)
+    assert "settings changed" in task.status.text() and task.result is None
+    click(QtWidgets.QDialogButtonBox.Ok)
+    doc.openTransaction("External edit during worker")
+    active = App.getActiveTransaction()
+    finish(task)
+    assert App.getActiveTransaction() == active and task.result is None
+    doc.abortTransaction()
+    click(QtWidgets.QDialogButtonBox.Ok)
+    field.IsoValue = .01
+    finish(task)
+    assert "inputs changed" in task.status.text() and task.result is None
+    field.IsoValue = 0
+    doc.recompute()
+    click(QtWidgets.QDialogButtonBox.Cancel)
+    assert len(doc.Objects) == count
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(source)
     task = ImplicitSolid.selected()
     assert task.form.objectName() == "ImplicitNativeSolidCreation"
     task.controls["MaximumGeometryDepth"].setValue(18)
@@ -116,12 +169,19 @@ def main():
         target.mapTo(scroll.viewport(), QtCore.QPoint()), target.size())) for scroll in scrolls)
     Gui.getMainWindow().grab().save("/tmp/implicit-solid-creation-settings.png")
     click(QtWidgets.QDialogButtonBox.Ok)
+    finish(task)
     assert not task.closed and task.result is None and Gui.Control.activeDialog()
     assert "Build failed:" in task.status.text()
     assert len(doc.Objects) == count and App.getActiveTransaction() is None
     assert source.ViewObject.Visibility and native.dumps_mixed(source.Geometry) == source_record
     task.controls["MaximumGeometryCells"].setValue(2000000)
-    click(QtWidgets.QDialogButtonBox.Ok)
+    extract = native.tessellate_mixed
+    native.build_mixed_solids = native.tessellate_mixed = forbidden
+    try:
+        click(QtWidgets.QDialogButtonBox.Ok)
+        assert finish(task) > 10, "GUI event loop did not run during construction"
+    finally:
+        native.build_mixed_solids, native.tessellate_mixed = build, extract
     obj = task.result
     assert task.closed and not Gui.Control.activeDialog()
     assert obj is not None and obj.SolidValidated and obj.Geometry is not None
@@ -133,7 +193,8 @@ def main():
     assert obj.ViewObject.Proxy._mesh, obj.ViewObject.SurfacePreviewStatus
     assert "NativeFace1" in obj.ViewObject.Proxy._elements
     Gui.activeDocument().activeView().viewAxonometric()
-    Gui.activeDocument().activeView().fitAll()
+    # Fit an expanded box so the report dock leaves an inspection margin.
+    Gui.activeDocument().activeView().fitAll(1.5)
     # Let the animated camera fit finish before capturing the resulting model.
     loop = QtCore.QEventLoop()
     QtCore.QTimer.singleShot(500, loop.quit)
@@ -161,8 +222,12 @@ def main():
             assert native.dumps_mixed_solids(obj.Geometry) == record and not obj.SolidValidated
             assert not source.ViewObject.Visibility and obj.ViewObject.Proxy._mesh
             # Closing the source document while staging creates no orphan result.
-            ImplicitSolidCreate.open_task(source)
+            closing = ImplicitSolidCreate.open_task(source)
+            click(QtWidgets.QDialogButtonBox.Ok)
+            job = closing.job
+            assert job is not None
             App.closeDocument(doc.Name)
+            cancelled(job)
             assert not Gui.Control.activeDialog() and App.getActiveTransaction() is None
     finally:
         native.build_mixed_solids = build

@@ -3,15 +3,18 @@
 import FreeCAD as App
 import FreeCADGui as Gui
 from PySide import QtCore, QtWidgets
-from ImplicitSolid import NativeSolid, build_limit_controls, create
+from ImplicitSolid import NativeSolid, build_limit_controls, _create
+import ImplicitOCCT as native
 
 
 class NativeSolidCreationTaskPanel:
     def __init__(self, source):
         self.source = source
         self.document_name = source.Document.Name
+        self.document = source.Document
         self.closed = False
         self.result = None
+        self.job = None
         self.form = QtWidgets.QWidget()
         self.form.setObjectName("ImplicitNativeSolidCreation")
         self.form.setWindowTitle("Create native implicit solid")
@@ -45,6 +48,41 @@ class NativeSolidCreationTaskPanel:
         self.status.setTextFormat(QtCore.Qt.PlainText)
         self.status.setWordWrap(True)
         layout.addRow(self.status)
+        self.timer = QtCore.QTimer(self.form)
+        self.timer.setInterval(50)
+        self.timer.timeout.connect(self._poll)
+        self.form.destroyed.connect(self._destroyed)
+        App.addDocumentObserver(self)
+
+    def _stop(self):
+        if self.job is not None:
+            native.cancel_solid_job(self.job)
+            self.job = None
+
+    def _destroyed(self, *_args):
+        self._stop()
+        self.closed = True
+        App.removeDocumentObserver(self)
+
+    def slotDeletedDocument(self, doc):
+        if doc == self.document:
+            self.timer.stop()
+            self._destroyed()
+
+    def _values(self):
+        return (self.tolerance.value(), int(self.resolution.currentText()),
+                {name: widget.value() for name, widget in self.controls.items()},
+                self.hide_source.isChecked())
+
+    def _check_source(self):
+        if (App.getDocument(self.document_name) != self.document
+                or not self.source.isValid() or self.source.Document != self.document):
+            raise RuntimeError("The boundary document or source is no longer available")
+        if App.getActiveTransaction():
+            raise RuntimeError("Finish the active transaction before creating a native solid")
+        if any("Touched" in item.State or not item.isValid()
+               for item in [self.source] + self.source.OutListRecursive):
+            raise RuntimeError("Boundary inputs changed; recompute before building")
 
     def getStandardButtons(self):
         return QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -61,28 +99,65 @@ class NativeSolidCreationTaskPanel:
     def accept(self):
         if self.closed:
             return True
+        if self.job is not None:
+            return False
         try:
-            doc = App.getDocument(self.document_name)
-            if doc is None or self.source.Document != doc:
-                raise RuntimeError("The boundary document is no longer available")
-            limits = {name: widget.value() for name, widget in self.controls.items()}
-            depth = limits.pop("MaximumGeometryDepth")
+            self._check_source()
+            self.request = self._values()
+            tolerance, resolution, limits, _hide = self.request
+            depth = limits["MaximumGeometryDepth"]
             if depth == 0:
                 raise ValueError("Geometry depth must be -1 (inherit) or 1 to 24")
-            self.result = create(self.source, self.tolerance.value(),
-                                 int(self.resolution.currentText()), depth,
-                                 build_limits=limits, hide_source=self.hide_source.isChecked())
+            self.record = NativeSolid._boundary_record(self.source)
+            self.job = native.start_solid_job(self.source.Geometry, tolerance, resolution,
+                *(limits[name] for name in ("MaximumDepth", "MaximumCells", "MaximumTests",
+                    "MaximumSeparatorCells", "MaximumGeometryCells", "MaximumSegmentTests")), depth)
+            self.status.setText("Building in background; Cancel stops this request")
+            self.timer.start()
         except Exception as error:
             self.status.setText("Build failed: " + str(error))
-            return False
+        return False
+
+    def _poll(self):
+        if self.closed or self.job is None:
+            self.timer.stop()
+            return
+        try:
+            self._check_source()
+            if self._values() != self.request:
+                raise RuntimeError("Build settings changed; submit a new build")
+            state = native.solid_job_status(self.job)
+            if state["state"] in ("queued", "running", "cancelling"):
+                self.status.setText("Background build: " + state["phase"].replace("_", " "))
+                return
+            if state["state"] != "ready":
+                raise RuntimeError(state["error"] or state["state"])
+            if NativeSolid._boundary_record(self.source) != self.record:
+                raise RuntimeError("Boundary changed during construction; submit a new build")
+            completed = native.take_solid_job(self.job)
+            self.job = None
+            self.timer.stop()
+            tolerance, resolution, limits, hide = self.request
+            limits = dict(limits)
+            depth = limits.pop("MaximumGeometryDepth")
+            self.result = _create(self.source, tolerance, resolution, depth,
+                                  build_limits=limits, hide_source=hide, completed=completed)
+        except Exception as error:
+            self._stop()
+            self.timer.stop()
+            self.status.setText("Build failed: " + str(error))
+            return
         self.closed = True
+        App.removeDocumentObserver(self)
         Gui.Control.closeDialog(Gui.getDocument(self.document_name))
         Gui.Selection.clearSelection()
         Gui.Selection.addSelection(self.result)
-        return True
 
     def reject(self):
         if not self.closed:
+            self._stop()
+            self.timer.stop()
+            App.removeDocumentObserver(self)
             self.closed = True
             if App.getDocument(self.document_name) is not None:
                 Gui.Control.closeDialog(Gui.getDocument(self.document_name))

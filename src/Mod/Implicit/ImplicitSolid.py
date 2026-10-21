@@ -225,6 +225,10 @@ from ImplicitNative import NativeBoundaryView
 
 
 class NativeSolidView(NativeBoundaryView):
+    def __init__(self, view, initial_preview=None):
+        self._initial_preview = initial_preview
+        super().__init__(view)
+
     def attach(self, view):
         self._ready = False
         self._task = None
@@ -327,10 +331,17 @@ class NativeSolidView(NativeBoundaryView):
                 preview_key = (proxy._digest, view.SurfaceTolerance.Value, view.SurfaceMaximumCells,
                                bool(view.CheckSurfaceDisplay))
                 if preview_key != self._preview_key:
-                    extract = (native.tessellate_mixed_checked if view.CheckSurfaceDisplay
-                               else native.tessellate_mixed)
-                    surface = extract(source["boundary_handle"], view.SurfaceTolerance.Value,
-                                      view.SurfaceMaximumCells)
+                    initial = getattr(self, "_initial_preview", None)
+                    self._initial_preview = None
+                    if initial is not None and preview_key[1:] == (.1, 256, False):
+                        surface, error = initial
+                        if error or surface is None:
+                            raise ValueError(error or "No initial display candidate")
+                    else:
+                        extract = (native.tessellate_mixed_checked if view.CheckSurfaceDisplay
+                                   else native.tessellate_mixed)
+                        surface = extract(source["boundary_handle"], view.SurfaceTolerance.Value,
+                                          view.SurfaceMaximumCells)
                     groups = component_triangles(surface, report["component_domains"])
                     self._preview_key, self._preview = preview_key, (surface, groups)
                 else:
@@ -649,6 +660,12 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
 
 def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1,
            *, build_limits=None, hide_source=False):
+    return _create(source, tolerance, topology_resolution, maximum_geometry_depth,
+                   build_limits=build_limits, hide_source=hide_source)
+
+
+def _create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1,
+            *, build_limits=None, hide_source=False, completed=None):
     import ImplicitOCCT  # ABI guard before document mutation.
     if App.getActiveTransaction():
         raise RuntimeError("Finish the active transaction before creating a native solid")
@@ -662,6 +679,10 @@ def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=
         if type(value) is not int or not low <= value <= high:
             raise ValueError(name + " must be an integer from %d to %d" % (low, high))
     NativeSolid._boundary_record(source)
+    if completed is not None and any(
+            "Touched" in item.State or not item.isValid()
+            for item in [source] + source.OutListRecursive):
+        raise ValueError("Recompute the changed boundary inputs before starting another build")
     document = source.Document
     document.openTransaction("Create live native implicit solid")
     try:
@@ -674,6 +695,18 @@ def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=
         for name, value in limits.items():
             setattr(obj, name, value)
         obj.Label = "Native implicit solid (experimental)"
+        if completed is not None:
+            record, settings, fingerprint = obj.Proxy._inputs(obj)
+            if record != completed["input_record"] or settings != completed["input_settings"]:
+                raise ValueError("Source or settings changed during the native solid build")
+            handle = completed["solid_handle"]
+            report = ImplicitOCCT.inspect_mixed_solids(handle)
+            stored = ImplicitOCCT.source_mixed_solids(handle)
+            if (not report["solid_validated"] or report["tolerance"] != tolerance
+                    or ImplicitOCCT.dumps_mixed(stored["boundary_handle"]) != record):
+                raise ValueError("Background result does not match the validated source")
+            obj.Geometry = handle
+            obj.InputFingerprint = fingerprint
         try:
             obj.Proxy.execute(obj)
         except Exception as error:
@@ -682,7 +715,8 @@ def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=
         if not obj.isValid() or obj.Geometry is None:
             raise RuntimeError(obj.BackendStatus)
         if App.GuiUp:
-            NativeSolidView(obj.ViewObject)
+            preview = None if completed is None else (completed["surface"], completed["surface_error"])
+            NativeSolidView(obj.ViewObject, preview)
             if hide_source:
                 source.ViewObject.Visibility = False
         document.commitTransaction()

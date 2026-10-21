@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Private OCCT 8-only binding. Import through the ABI-checking ImplicitOCCT facade.
 #include <Python.h>
+#include "NativeSolidJob.h"
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <BRep_ImplicitIO.hxx>
@@ -849,6 +850,11 @@ PyObject* classifyMixed(PyObject* args)
     return result.release();
 }
 
+template<bool Surface, bool CheckedDisplay>
+PyObject* mixedMeshReport(const BRepClass3d_ImplicitBox::Boundary* boundary,
+                          const BRepMesh_ImplicitBoundary::Result& mesh,
+                          Object displayChecks, Object assignmentVertices);
+
 template<bool Surface, bool CheckedDisplay = false>
 PyObject* prepareMixedMesh(PyObject* args)
 {
@@ -955,6 +961,15 @@ PyObject* prepareMixedMesh(PyObject* args)
             return nullptr;
         }
     }
+    return mixedMeshReport<Surface, CheckedDisplay>(boundary, mesh,
+        std::move(displayChecks), std::move(assignmentVertices));
+}
+
+template<bool Surface, bool CheckedDisplay>
+PyObject* mixedMeshReport(const BRepClass3d_ImplicitBox::Boundary* boundary,
+                          const BRepMesh_ImplicitBoundary::Result& mesh,
+                          Object displayChecks, Object assignmentVertices)
+{
     Object result(PyDict_New()), vertices(PyList_New(mesh.Nodes.size()));
     Object triangles(PyList_New(mesh.CapTriangles.size()));
     Object implicitTriangles(PyList_New(mesh.ImplicitTriangles.size()));
@@ -1746,6 +1761,131 @@ PyObject* buildMixedSolids(PyObject* args)
     return result.release();
 }
 
+constexpr const char* solidJobName = "ImplicitOCCT.NativeSolidJob.v1";
+using SolidJobPtr = std::shared_ptr<Implicit::NativeSolidJob>;
+
+void destroySolidJob(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, solidJobName)) {
+        auto* job = static_cast<SolidJobPtr*>(PyCapsule_GetPointer(capsule, solidJobName));
+        (*job)->cancel();
+        delete job;
+    }
+}
+
+SolidJobPtr readSolidJob(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) { return {}; }
+    if (!PyCapsule_IsValid(object, solidJobName)) {
+        PyErr_SetString(PyExc_TypeError, "expected a native solid job handle");
+        return {};
+    }
+    return *static_cast<SolidJobPtr*>(PyCapsule_GetPointer(object, solidJobName));
+}
+
+PyObject* startSolidJob(PyObject* args)
+{
+    PyObject* object;
+    Implicit::NativeSolidRequest request;
+    unsigned long long cells = request.cells, tests = request.tests, separators = request.separators,
+                       geometryCells = request.geometryCells, segments = request.segments;
+    if (!PyArg_ParseTuple(args, "O|diiKKKKKi", &object, &request.tolerance, &request.resolution,
+            &request.depth, &cells, &tests, &separators, &geometryCells, &segments, &request.geometryDepth)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    if (!std::isfinite(request.tolerance) || request.tolerance <= 0
+        || request.resolution < 4 || request.resolution > 64
+        || (request.resolution & (request.resolution - 1)) || request.depth < 0 || request.depth > 16
+        || (request.geometryDepth != -1 && (request.geometryDepth < 1 || request.geometryDepth > 24))
+        || !cells || cells > 10000000 || !tests || tests > 10000000
+        || !separators || separators > 10000000 || !geometryCells || geometryCells > 10000000
+        || !segments || segments > 50000000) {
+        throw Standard_DomainError("Invalid native solid job settings");
+    }
+    request.cells = size_t(cells);
+    request.tests = size_t(tests);
+    request.separators = size_t(separators);
+    request.geometryCells = size_t(geometryCells);
+    request.segments = size_t(segments);
+    const auto* source = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName));
+    std::ostringstream output;
+    BRepClass3d_ImplicitBoxIO::Write(*source, output);
+    request.boundary = output.str();
+    auto job = std::make_unique<SolidJobPtr>(Implicit::submitNativeSolid(std::move(request)));
+    PyObject* capsule = PyCapsule_New(job.get(), solidJobName, destroySolidJob);
+    if (!capsule) {
+        (*job)->cancel();
+        return nullptr;
+    }
+    job.release();
+    return capsule;
+}
+
+PyObject* solidJobStatus(PyObject* args)
+{
+    const auto job = readSolidJob(args);
+    if (!job) { return nullptr; }
+    const auto status = job->status();
+    constexpr const char* states[] = {"queued", "running", "ready", "failed", "cancelled", "consumed"};
+    constexpr const char* phases[] = {"copying", "topology", "cap_attachment", "trim_attachment",
+                                     "shell_assembly", "geometry", "solid_assembly", "meshing"};
+    const char* state = status.cancelling && status.state == Implicit::NativeSolidJob::State::Running
+        ? "cancelling" : states[static_cast<int>(status.state)];
+    return Py_BuildValue("{s:s,s:s,s:K,s:s}", "state", state,
+        "phase", phases[static_cast<int>(status.phase)],
+        "checkpoints", static_cast<unsigned long long>(status.checkpoints), "error", status.error.c_str());
+}
+
+PyObject* cancelSolidJob(PyObject* args)
+{
+    const auto job = readSolidJob(args);
+    if (!job) { return nullptr; }
+    job->cancel();
+    Py_RETURN_NONE;
+}
+
+PyObject* takeSolidJob(PyObject* args)
+{
+    const auto job = readSolidJob(args);
+    if (!job) { return nullptr; }
+    auto data = job->take();
+    Object result(nativeSolidReport(*data->solid));
+    if (!result) { return nullptr; }
+    Object surface(data->surface
+        ? mixedMeshReport<true, false>(&data->solid->Boundary.Source, *data->surface, {}, {})
+        : Py_NewRef(Py_None));
+    if (!surface) { return nullptr; }
+    const auto& input = data->request;
+    Object settings(input.geometryDepth == -1
+        ? Py_BuildValue("(diiKKKKK)", input.tolerance, input.resolution, input.depth,
+            static_cast<unsigned long long>(input.cells), static_cast<unsigned long long>(input.tests),
+            static_cast<unsigned long long>(input.separators), static_cast<unsigned long long>(input.geometryCells),
+            static_cast<unsigned long long>(input.segments))
+        : Py_BuildValue("(diiKKKKKi)", input.tolerance, input.resolution, input.depth,
+            static_cast<unsigned long long>(input.cells), static_cast<unsigned long long>(input.tests),
+            static_cast<unsigned long long>(input.separators), static_cast<unsigned long long>(input.geometryCells),
+            static_cast<unsigned long long>(input.segments), input.geometryDepth));
+    if (!settings
+        || !set(result.get(), "input_settings", settings.release())
+        || !set(result.get(), "input_record", PyUnicode_FromStringAndSize(
+            input.boundary.data(), Py_ssize_t(input.boundary.size())))
+        || !set(result.get(), "surface", surface.release())
+        || !set(result.get(), "surface_error", PyUnicode_FromString(data->surfaceError.c_str()))) {
+        return nullptr;
+    }
+    Object capsule(PyCapsule_New(data->solid.get(), solidsName, destroySolids));
+    if (!capsule) { return nullptr; }
+    data->solid.release();
+    if (!set(result.get(), "solid_handle", capsule.release())) { return nullptr; }
+    return result.release();
+}
+
 PyObject* inspectMixedSolids(PyObject* args)
 {
     PyObject* object;
@@ -2309,6 +2449,14 @@ PyMethodDef methods[] = {
     {"source_mixed_solids", checked<sourceMixedSolids>, METH_VARARGS,
      "source_mixed_solids(solid_handle) -> owned authoritative SOURCE boundary, not the result "
      "solids. Explicitly rebuild/recheck using this source; source flags are not proof."},
+    {"start_solid_job", checked<startSolidJob>, METH_VARARGS,
+     "Start a bounded native solid/initial-display job from a private boundary snapshot."},
+    {"solid_job_status", checked<solidJobStatus>, METH_VARARGS,
+     "Read native work state, phase and checkpoint count without waiting."},
+    {"cancel_solid_job", checked<cancelSolidJob>, METH_VARARGS,
+     "Request cooperative cancellation; queued/ready results are discarded."},
+    {"take_solid_job", checked<takeSolidJob>, METH_VARARGS,
+     "Consume a completed fresh solid and initial display candidate exactly once."},
     {"build_mixed_solids", checked<buildMixedSolids>, METH_VARARGS,
      "build_mixed_solids(boundary_handle, tolerance=.1, resolution=32, maximum_depth=16, "
      "maximum_cells=4000000, maximum_tests=2000000, maximum_separator_cells=2000000, "
