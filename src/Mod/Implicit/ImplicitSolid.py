@@ -126,6 +126,9 @@ class NativeSolid:
 
     def execute(self, obj):
         import ImplicitOCCT as native
+        if getattr(self, "_pending_job", None) is not None:
+            obj.BackendStatus = "Pending native solid background preview"
+            return
         try:
             if self._restore_failed:
                 raise RuntimeError("Native solid restoration failed; explicit Proxy.rebuild(obj) required")
@@ -190,6 +193,30 @@ class NativeSolid:
         self._restoring = True
         self._publishing = False
         self._restore_failed = False
+        self._pending_job = None
+
+    def publish(self, obj, completed):
+        """Publish a fresh matching worker result on the document's thread."""
+        import ImplicitOCCT as native
+        record, settings, fingerprint = self._inputs(obj)
+        handle = completed["solid_handle"]
+        report = native.inspect_mixed_solids(handle)
+        stored = native.source_mixed_solids(handle)
+        if (self._restore_failed or record != completed["input_record"]
+                or settings != completed["input_settings"] or not report["solid_validated"]
+                or report["tolerance"] != settings[0]
+                or native.dumps_mixed(stored["boundary_handle"]) != record):
+            raise ValueError("Background result does not match the current validated source/settings")
+        if App.GuiUp and isinstance(obj.ViewObject.Proxy, NativeSolidView):
+            obj.ViewObject.Proxy._initial_preview = (completed["surface"], completed["surface_error"])
+        self._publishing = True
+        try:
+            obj.Geometry = handle
+            obj.InputFingerprint = fingerprint
+        finally:
+            self._publishing = False
+        self._placement(obj)
+        self._refresh(obj)
 
 
 def component_triangles(mesh, domains):
@@ -516,6 +543,8 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
         self.transaction = 0
         self.closed = False
         self.source = obj.Source
+        self.batch = None
+        self.accept_when_ready = False
         self.edit_operation = (self.source is not None and self.source.Document == obj.Document
                                and isinstance(getattr(self.source, "Proxy", None), MixedBoundary))
         # TaskPanel already supplies a scroll area: avoid nested scrolling.
@@ -597,10 +626,100 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
         self.status.setWordWrap(True)
         layout.addRow(self.status)
 
-    def apply(self):
+        self.timer = QtCore.QTimer(self.form)
+        self.timer.setInterval(50)
+        self.timer.timeout.connect(self._poll_preview)
+        self.form.destroyed.connect(self._destroyed_preview)
+        App.addDocumentObserver(self)
+
+    def _destroyed_preview(self, *_args):
+        if self.batch is not None:
+            self.batch.cancel()
+            self.batch = None
+        App.removeDocumentObserver(self)
+
+    def slotDeletedDocument(self, doc):
+        if doc.Name == self.document_name:
+            self.timer.stop()
+            self._destroyed_preview()
+            self.closed = True
+
+    def _poll_preview(self):
+        if self.closed or self.batch is None:
+            self.timer.stop()
+            return
+        if self._preview_controls != self._control_signature():
+            self.batch.error = "Preview settings changed; Apply again"
+            self.batch.cancel()
+        state = self.batch.step()
+        if state == "pending":
+            self.status.setText("Background preview " + self.batch.phase)
+            return
+        batch, self.batch = self.batch, None
+        self.timer.stop()
+        if state != "ready":
+            self.accept_when_ready = False
+            self.status.setText("Preview failed: " + (batch.error or state))
+            return
+        try:
+            self.obj.Document.recompute()
+            if self.obj.Geometry is None or not self.obj.isValid():
+                raise RuntimeError(self.obj.BackendStatus)
+            self.status.setText(self.obj.BackendStatus)
+            if self.accept_when_ready:
+                self.accept_when_ready = False
+                self.finish(True)
+        except Exception as error:
+            self.accept_when_ready = False
+            self.status.setText("Preview failed: " + str(error))
+
+    def clicked(self, button):
+        from PySide import QtWidgets
+        if button == QtWidgets.QDialogButtonBox.Apply:
+            self.accept_when_ready = False
+            self.apply(background=True)
+
+    def _control_signature(self):
+        return (self.operation.currentText(), self.tolerance.value(), self.resolution.currentText(),
+                tuple((name, widget.value()) for name, widget in self.controls.items()),
+                tuple((name, widget.value()) for name, widget in self.parameters.items()),
+                self.follow.isChecked(), self.fit_domain.isChecked() if self.source_edits else None)
+
+    def accept(self):
+        if self.batch is not None:
+            self.accept_when_ready = True
+            return False
+        self.accept_when_ready = True
+        if self.apply(background=True):
+            self.accept_when_ready = False
+            return self.finish(True)
+        if self.batch is None:
+            self.accept_when_ready = False
+        return False
+
+    def finish(self, commit, reset_edit=True):
+        if self.closed:
+            return True
+        if commit and self.batch is not None:
+            return False
+        if self.batch is not None:
+            self.batch.cancel()
+            self.batch = None
+        self.timer.stop()
+        finished = super().finish(commit, reset_edit)
+        if finished:
+            App.removeDocumentObserver(self)
+        return finished
+
+    def apply(self, background=False):
         if self.closed:
             return False
+        if self.batch is not None:
+            self.batch.cancel()
+            self.batch = None
+            self.timer.stop()
         editing_started = False
+        affected = []
         try:
             doc = App.getDocument(self.document_name)
             if doc is None or self.obj.Document != doc:
@@ -642,7 +761,28 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             # normal recompute then reuses the checked snapshot/dependency data.
             if self.edit_operation and self.source not in affected:
                 affected.append(self.source)
-            rebuild(affected)
+            if background:
+                from ImplicitSolidBatch import SolidBatch
+                for source in affected:
+                    source.Proxy.execute(source)
+                targets = [item for item in doc.Objects
+                           if isinstance(getattr(item, "Proxy", None), NativeSolid)
+                           and (item == self.obj or item.Source in affected)]
+                pending = []
+                for item in targets:
+                    if (item.Geometry is not None
+                            and item.InputFingerprint == item.Proxy._inputs(item)[2]):
+                        item.Proxy.execute(item)  # Verify unchanged snapshots, without revalidation.
+                    else:
+                        pending.append(item)
+                if pending:
+                    self.batch = SolidBatch(pending, self.transaction)
+                    self._preview_controls = self._control_signature()
+                    self.status.setText("Background preview queued; Cancel restores the edit")
+                    self.timer.start()
+                    return False
+            else:
+                rebuild(affected)
             if self.source not in affected:
                 self.obj.Proxy.execute(self.obj)
             doc.recompute()
@@ -651,6 +791,17 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             self.status.setText(self.obj.BackendStatus)
             return True
         except Exception as error:
+            active = App.getActiveTransaction()
+            if editing_started and active and active[1] == self.transaction:
+                # Preflight/submission can fail before a batch acquires owners.
+                # Changed settings must never leave yesterday's valid geometry.
+                for item in doc.Objects:
+                    if (isinstance(getattr(item, "Proxy", None), NativeSolid)
+                            and (item == self.obj or item.Source in affected)):
+                        item.Geometry = None
+                        if not item.Proxy._restore_failed:
+                            item.InputFingerprint = ""
+                        item.BackendStatus = "Preview failed: " + str(error)
             self.status.setText("Preview failed: " + str(error))
             return False
         finally:

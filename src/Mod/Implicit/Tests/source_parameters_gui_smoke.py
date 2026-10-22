@@ -3,6 +3,7 @@
 import os
 import tempfile
 import traceback
+import time
 import FreeCAD as App
 import FreeCADGui as Gui
 import ImplicitMixed
@@ -35,6 +36,14 @@ def click(button):
     assert len(boxes) == 1, "Task buttons are not fully visible"
     boxes[0].button(button).click()
     Gui.updateGui()
+    deadline = time.monotonic() + 120
+    while App.ActiveDocument is not None and any(
+            getattr(getattr(getattr(item.ViewObject, "Proxy", None), "_task", None), "batch", None) is not None
+            for item in App.ActiveDocument.Objects):
+        assert time.monotonic() < deadline, "Background shared-input edit did not finish"
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
 
 
 def main():

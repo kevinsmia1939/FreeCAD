@@ -183,6 +183,10 @@ class SourceEdits:
                     setattr(self.box, name, values[name])
             if not self.box.recompute():
                 raise ValueError("Conventional box failed to recompute")
+            # Single-object recompute evaluates geometry but, unlike document
+            # recompute, does not clear its touched flag. Downstream objects
+            # remain touched; only this successfully evaluated leaf is clean.
+            self.box.purgeTouched()
         if fit_domain:
             self.field.DomainMin = low
             if mode == "dimensions":
@@ -192,4 +196,5 @@ class SourceEdits:
                 self.field.DomainMax = high
         if not self.field.recompute():
             raise ValueError("Gyroid field/domain expressions failed to recompute")
+        self.field.purgeTouched()
         return affected
