@@ -15,7 +15,7 @@ class Request:
         self.generation = generation
         self.boundary = boundary
         self.record = native.dumps_mixed(boundary)
-        self.settings = (key[1], key[2], 200000, 400000, True, 14,
+        self.settings = (key[1], key[2], 200000, 400000, key[3], 14,
                          2000000, 1000000, 2000000, 50000000)
         self.job = None
 
@@ -77,7 +77,7 @@ class Scheduler:
             try:
                 if (view is None or App.getDocument(request.document_name) != request.document
                         or not request.obj.isValid()
-                        or not view._checked_job_current(request.generation, request.key)):
+                        or not view._surface_job_current(request.generation, request.key)):
                     self._drop(identity, request)
                     continue
                 # A stored solid can remain unchanged while upstream input
@@ -94,7 +94,7 @@ class Scheduler:
                     if request.job is not None:
                         native.cancel_native_job(request.job)
                         request.job = None
-                    view._view.SurfacePreviewStatus = "Checking display: waiting for solid preview"
+                    view._view.SurfacePreviewStatus = "Generating display: waiting for solid preview"
                     continue
                 if request.job is None:
                     # Keep a native queue slot available for interactive solid
@@ -109,7 +109,7 @@ class Scheduler:
                         raise
                 status = native.native_job_status(request.job)
                 if status["state"] in ("queued", "running", "cancelling"):
-                    view._view.SurfacePreviewStatus = "Checking display: " + status["phase"].replace("_", " ")
+                    view._view.SurfacePreviewStatus = "Generating display: " + status["phase"].replace("_", " ")
                     continue
                 if status["state"] != "ready":
                     raise RuntimeError(status["error"] or status["state"])
@@ -122,15 +122,15 @@ class Scheduler:
                 proxy = request.obj.Proxy
                 if proxy._inputs(request.obj)[2] != request.obj.InputFingerprint:
                     raise ValueError("Native solid settings or source changed; recompute before checking display")
-                if not view._checked_job_current(request.generation, request.key):
+                if not view._surface_job_current(request.generation, request.key):
                     self._drop(identity, request)
                     continue
                 self._drop(identity, request)
-                view._checked_job_ready(request.generation, request.key, result["surface"])
+                view._surface_job_ready(request.generation, request.key, result["surface"])
             except Exception as error:
                 self._drop(identity, request)
-                if view is not None and view._checked_job_current(request.generation, request.key):
-                    view._checked_job_error(str(error))
+                if view is not None and view._surface_job_current(request.generation, request.key):
+                    view._surface_job_error(str(error))
         if not self.requests:
             self.timer.stop()
 

@@ -3,6 +3,8 @@
 import os
 import tempfile
 import traceback
+import time
+from PySide import QtCore
 import FreeCAD as App
 import FreeCADGui as Gui
 import ImplicitMixed
@@ -29,6 +31,12 @@ def pixel_pick(obj, point):
 
 def check(obj):
     Gui.updateGui()
+    deadline = time.monotonic() + 90
+    while obj.ViewObject.Proxy._display_pending:
+        assert time.monotonic() < deadline, obj.ViewObject.SurfacePreviewStatus
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
     view = obj.ViewObject.Proxy
     mesh = view._mesh
     assert mesh, obj.ViewObject.SurfacePreviewStatus

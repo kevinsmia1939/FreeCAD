@@ -49,20 +49,44 @@ def main():
     doc.recompute()
     source = ImplicitMixed.create(field, box, corner_policy="Regularized")
     first, second = ImplicitSolid.create(source), ImplicitSolid.create(source)
+    until(lambda: all(not owner.ViewObject.Proxy._display_pending for owner in (first, second)))
+    assert all(owner.ViewObject.Proxy._mesh for owner in (first, second))
     record = native.dumps_mixed_solids(first.Geometry)
-    sync, start = native.tessellate_mixed_checked, native.start_surface_job
+    sync, unchecked, start = native.tessellate_mixed_checked, native.tessellate_mixed, native.start_surface_job
     calls = []
     def forbidden(*_args):
-        raise AssertionError("GUI invoked synchronous checked extraction")
+        raise AssertionError("GUI invoked synchronous extraction")
     def observed(*args):
         job = start(*args)
         calls.append(args[1:])
         return job
     native.tessellate_mixed_checked, native.start_surface_job = forbidden, observed
+    native.tessellate_mixed = forbidden
     try:
         view = first.ViewObject.Proxy
+        first.ViewObject.SurfaceTolerance = .099999
+        first.ViewObject.SurfaceTolerance = .099998
+        assert view._display_pending and view._mesh is None
+        ticks = until(lambda: not view._display_pending)
+        assert ticks > 1, "Qt did not run during unchecked extraction"
+        assert view._mesh and not view._mesh.get("display_checks")
+        assert not first.ViewObject.DisplayProximityChecked
+        assert len(calls) == 1 and calls[0][0] == .099998 and calls[0][4] is False, calls
+        unchecked_generation, unchecked_key, unchecked_mesh = (
+            view._display_generation, view._preview_key, view._mesh)
+        # Returning to an unchecked cache before the timer fires must cancel
+        # the queued checked request and retain the original candidate.
+        first.ViewObject.CheckSurfaceDisplay = True
+        assert view._display_pending
+        first.ViewObject.CheckSurfaceDisplay = False
+        assert not view._display_pending and view._mesh is unchecked_mesh
+        assert not first.ViewObject.DisplayProximityChecked
+        first.ViewObject.SurfaceTolerance = .1
         first.ViewObject.CheckSurfaceDisplay = True
         assert view._display_pending and not first.ViewObject.DisplayProximityChecked
+        view._surface_job_ready(unchecked_generation, unchecked_key, unchecked_mesh)
+        view._surface_job_ready(unchecked_generation, view._surface_key(), unchecked_mesh)
+        assert view._mesh is None
         first.ViewObject.DisplayProximityChecked = True
         assert not first.ViewObject.DisplayProximityChecked
         assert ready(first) > 10, "Qt did not run while checked extraction was pending"
@@ -75,8 +99,8 @@ def main():
         first.ViewObject.SurfaceTolerance = .1
         second.ViewObject.CheckSurfaceDisplay = True
         assert view._display_pending and view._mesh is None
-        view._checked_job_ready(old_generation, old_key, old_mesh)
-        view._checked_job_ready(old_generation, view._surface_key(), old_mesh)
+        view._surface_job_ready(old_generation, old_key, old_mesh)
+        view._surface_job_ready(old_generation, view._surface_key(), old_mesh)
         assert view._mesh is None and not first.ViewObject.DisplayProximityChecked
         ready(first); ready(second)
         assert len(calls) == before + 2
@@ -143,6 +167,7 @@ def main():
         until(lambda: native.native_job_status(job)["state"] == "cancelled", 10)
     finally:
         native.tessellate_mixed_checked, native.start_surface_job = sync, start
+        native.tessellate_mixed = unchecked
         if document_name in App.listDocuments():
             App.closeDocument(document_name)
     print("native implicit async checked display GUI smoke test passed", flush=True)

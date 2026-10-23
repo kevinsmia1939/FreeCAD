@@ -25,6 +25,15 @@ def finish(task):
     return pulses
 
 
+def wait_display(obj):
+    deadline = time.monotonic() + 90
+    while obj.ViewObject.Proxy._display_pending:
+        assert time.monotonic() < deadline, obj.ViewObject.SurfacePreviewStatus
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
+
+
 def cancelled(job):
     deadline = time.monotonic() + 10
     while native.solid_job_status(job)["state"] != "cancelled":
@@ -220,6 +229,7 @@ def main():
             obj, source = doc.getObject(name), doc.getObject(source_name)
             assert obj.MaximumGeometryDepth == 18 and obj.GeometricTolerance.Value == .1
             assert native.dumps_mixed_solids(obj.Geometry) == record and not obj.SolidValidated
+            wait_display(obj)
             assert not source.ViewObject.Visibility and obj.ViewObject.Proxy._mesh
             # Closing the source document while staging creates no orphan result.
             closing = ImplicitSolidCreate.open_task(source)

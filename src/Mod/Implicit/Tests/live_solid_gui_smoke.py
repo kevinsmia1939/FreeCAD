@@ -3,6 +3,8 @@
 import os
 import tempfile
 import traceback
+import time
+from PySide import QtCore
 import FreeCAD as App
 import FreeCADGui as Gui
 import Implicit
@@ -28,7 +30,17 @@ def pixel_pick(obj, point):
     return [obj.ViewObject.getElementPicked(hit) for hit in action.getPickedPointList()]
 
 
+def wait_display(obj):
+    deadline = time.monotonic() + 90
+    while obj.ViewObject.Proxy._display_pending:
+        assert time.monotonic() < deadline, obj.ViewObject.SurfacePreviewStatus
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
+
+
 def check(obj):
+    wait_display(obj)
     view = obj.ViewObject.Proxy
     assert view._mesh, obj.ViewObject.SurfacePreviewStatus
     report = obj.Proxy._solid
@@ -107,6 +119,7 @@ def main():
     finally:
         native.build_mixed_solids, native.tessellate_mixed = build, tessellate
     obj.ViewObject.SurfaceMaximumCells = 7
+    wait_display(obj)
     assert obj.ViewObject.Proxy._mesh is None
     assert "NativeFace1" not in obj.ViewObject.Proxy._elements
     assert "failed" in obj.ViewObject.SurfacePreviewStatus
@@ -152,8 +165,16 @@ def main():
             native.build_mixed_solids = build
     Gui.Selection.clearSelection()
     Gui.Selection.addSelection(obj.Source)
+    count = len(doc.Objects)
     Gui.runCommand("Implicit_NativeSolid")
-    assert doc.Objects[-1].TypeId == "Implicit::NativeSolidFeaturePython"
+    assert Gui.Control.activeDialog() and len(doc.Objects) == count
+    # Creation now stages settings; cancelling must not add a result.
+    from PySide import QtWidgets
+    buttons = [box for box in Gui.getMainWindow().findChildren(QtWidgets.QDialogButtonBox)
+               if box.isVisible() and box.button(QtWidgets.QDialogButtonBox.Cancel) is not None]
+    assert len(buttons) == 1
+    buttons[0].button(QtWidgets.QDialogButtonBox.Cancel).click()
+    assert not Gui.Control.activeDialog() and len(doc.Objects) == count
     # Exercise the actual two-component result, not one aggregate source face.
     App.closeDocument(doc.Name)
     doc = App.newDocument("SolidComponentsGUI")

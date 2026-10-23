@@ -311,24 +311,24 @@ class NativeSolidView(NativeBoundaryView):
         except (AttributeError, RuntimeError, ReferenceError):
             return False
 
-    def _checked_job_current(self, generation, key):
+    def _surface_job_current(self, generation, key):
         try:
             return (self._ready and self._view.Proxy is self and self._display_generation == generation
                     and self._view.Object.isValid() and self._view.Object.Geometry is not None
-                    and self._view.ShowImplicitSurface and self._view.CheckSurfaceDisplay
+                    and self._view.ShowImplicitSurface
                     and self._surface_key() == key)
         except (AttributeError, RuntimeError, ReferenceError):
             return False
 
-    def _checked_job_ready(self, generation, key, surface):
-        if not self._checked_job_current(generation, key):
+    def _surface_job_ready(self, generation, key, surface):
+        if not self._surface_job_current(generation, key):
             return
         groups = component_triangles(surface, self._view.Object.Proxy._solid["component_domains"])
         self._preview_key, self._preview = key, (surface, groups)
         self._key = None
         self.updateData(self._view.Object, "NativeRevision")
 
-    def _checked_job_error(self, error):
+    def _surface_job_error(self, error):
         self._display_pending = False
         self._key = self._preview_key = self._preview = None
         self._mesh = None
@@ -368,8 +368,7 @@ class NativeSolidView(NativeBoundaryView):
         import FreeCADGui as Gui
         view = self._view
         proxy = obj.Proxy
-        if (not view.ShowImplicitSurface or not view.CheckSurfaceDisplay
-                or obj.Geometry is None):
+        if not view.ShowImplicitSurface or obj.Geometry is None:
             from ImplicitSurfaceJobs import cancel
             cancel(self)
         key = (proxy._digest, bool(view.ShowImplicitSurface), bool(view.ShowBoundaryEdges),
@@ -410,22 +409,22 @@ class NativeSolidView(NativeBoundaryView):
                     initial = getattr(self, "_initial_preview", None)
                     self._initial_preview = None
                     if initial is not None and preview_key[1:] == (.1, 256, False):
+                        from ImplicitSurfaceJobs import cancel
+                        cancel(self)
                         surface, error = initial
                         if error or surface is None:
                             raise ValueError(error or "No initial display candidate")
                     else:
-                        if view.CheckSurfaceDisplay:
-                            from ImplicitSurfaceJobs import scheduler
-                            scheduler().submit(self, preview_key, source["boundary_handle"])
-                            pending = True
-                            view.SurfacePreviewStatus = "Checking display: queued"
-                        else:
-                            surface = native.tessellate_mixed(source["boundary_handle"],
-                                view.SurfaceTolerance.Value, view.SurfaceMaximumCells)
+                        from ImplicitSurfaceJobs import scheduler
+                        scheduler().submit(self, preview_key, source["boundary_handle"])
+                        pending = True
+                        view.SurfacePreviewStatus = "Generating display: queued"
                     if not pending:
                         groups = component_triangles(surface, report["component_domains"])
                         self._preview_key, self._preview = preview_key, (surface, groups)
                 else:
+                    from ImplicitSurfaceJobs import cancel
+                    cancel(self)
                     surface, groups = self._preview
                 self._mesh = surface
                 checks = surface.get("display_checks") if surface else None
