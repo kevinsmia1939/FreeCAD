@@ -3,16 +3,28 @@
 import os
 import tempfile
 import traceback
+import time
 import FreeCAD as App
 import FreeCADGui as Gui
 import ImplicitMixed
 import ImplicitSolid
 import ImplicitOCCT as native
 from pivy import coin
+from PySide import QtCore
+
+
+def wait_display(obj):
+    deadline = time.monotonic() + 90
+    while obj.ViewObject.Proxy._display_pending:
+        assert time.monotonic() < deadline, obj.ViewObject.SurfacePreviewStatus
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
 
 
 def check(obj):
     Gui.updateGui()
+    wait_display(obj)
     view = obj.ViewObject.Proxy
     mesh = view._mesh
     assert obj.ViewObject.DisplayProximityChecked, obj.ViewObject.SurfacePreviewStatus
@@ -51,10 +63,10 @@ def main():
     assert not obj.ViewObject.DisplayProximityChecked
     obj.ViewObject.CheckSurfaceDisplay = True
     first = check(obj)
-    checked_extract = native.tessellate_mixed_checked
+    checked_extract = native.start_surface_job
     def forbidden(*_args):
         raise AssertionError("unexpected display extraction")
-    native.tessellate_mixed_checked = forbidden
+    native.start_surface_job = forbidden
     try:
         obj.ViewObject.ShowBoundaryEdges = False
         assert check(obj) is first  # Visibility/camera changes reuse checked buffers.
@@ -75,12 +87,13 @@ def main():
             view._face = upload
         # A changed extraction key must discard the old checked state.
         obj.ViewObject.SurfaceMaximumCells = 128
+        wait_display(obj)
         assert not obj.ViewObject.DisplayProximityChecked and obj.ViewObject.Proxy._mesh is None
         assert "NativeFace1" not in obj.ViewObject.Proxy._elements
         assert obj.Geometry is not None and obj.SolidValidated
         assert "Unsupported/failed" in obj.ViewObject.SurfacePreviewStatus
     finally:
-        native.tessellate_mixed_checked = checked_extract
+        native.start_surface_job = checked_extract
     obj.touch(); doc.recompute()
     second = check(obj)
     assert second is not first

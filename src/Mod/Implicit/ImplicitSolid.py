@@ -263,6 +263,8 @@ class NativeSolidView(NativeBoundaryView):
         self._key = None
         self._elements, self._picked = {}, {}
         self._mesh = None
+        self._display_pending = False
+        self._display_generation = 0
         self._preview_key = self._preview = None
         super().attach(view)
         self._root.removeChild(self._faces)
@@ -286,10 +288,52 @@ class NativeSolidView(NativeBoundaryView):
 
     def onChanged(self, view, prop):
         super().onChanged(view, prop)
+        if (prop == "DisplayProximityChecked" and getattr(self, "_ready", False)
+                and view.DisplayProximityChecked and not self._checked_cache_current()):
+            view.DisplayProximityChecked = False
         if getattr(self, "_ready", False) and prop in (
                 "ShowImplicitSurface", "ShowBoundaryEdges", "ShowVertices",
                 "SurfaceTolerance", "SurfaceMaximumCells", "CheckSurfaceDisplay"):
             self.updateData(view.Object, "NativeRevision")
+
+    def _surface_key(self):
+        view = self._view
+        return (view.Object.Proxy._digest, view.SurfaceTolerance.Value,
+                view.SurfaceMaximumCells, bool(view.CheckSurfaceDisplay))
+
+    def _checked_cache_current(self):
+        try:
+            checks = (self._mesh or {}).get("display_checks", {})
+            return (self._key is not None and self._view.Proxy is self and self._view.ShowImplicitSurface
+                    and self._view.CheckSurfaceDisplay and self._view.Object.Geometry is not None
+                    and self._preview_key == self._surface_key()
+                    and checks.get("boundary_proximity_resolved") and checks.get("triangle_contacts_clear"))
+        except (AttributeError, RuntimeError, ReferenceError):
+            return False
+
+    def _checked_job_current(self, generation, key):
+        try:
+            return (self._ready and self._view.Proxy is self and self._display_generation == generation
+                    and self._view.Object.isValid() and self._view.Object.Geometry is not None
+                    and self._view.ShowImplicitSurface and self._view.CheckSurfaceDisplay
+                    and self._surface_key() == key)
+        except (AttributeError, RuntimeError, ReferenceError):
+            return False
+
+    def _checked_job_ready(self, generation, key, surface):
+        if not self._checked_job_current(generation, key):
+            return
+        groups = component_triangles(surface, self._view.Object.Proxy._solid["component_domains"])
+        self._preview_key, self._preview = key, (surface, groups)
+        self._key = None
+        self.updateData(self._view.Object, "NativeRevision")
+
+    def _checked_job_error(self, error):
+        self._display_pending = False
+        self._key = self._preview_key = self._preview = None
+        self._mesh = None
+        self._view.DisplayProximityChecked = False
+        self._view.SurfacePreviewStatus = "Unsupported/failed field preview: " + error
 
     def _face(self, root, name, points, normals, triangles):
         from pivy import coin
@@ -324,6 +368,10 @@ class NativeSolidView(NativeBoundaryView):
         import FreeCADGui as Gui
         view = self._view
         proxy = obj.Proxy
+        if (not view.ShowImplicitSurface or not view.CheckSurfaceDisplay
+                or obj.Geometry is None):
+            from ImplicitSurfaceJobs import cancel
+            cancel(self)
         key = (proxy._digest, bool(view.ShowImplicitSurface), bool(view.ShowBoundaryEdges),
                bool(view.ShowVertices), view.SurfaceTolerance.Value, view.SurfaceMaximumCells,
                bool(view.CheckSurfaceDisplay))
@@ -350,6 +398,7 @@ class NativeSolidView(NativeBoundaryView):
         surface = None
         checked_status = None
         preview_failed = False
+        pending = False
         groups = [[] for _ in report["component_domains"]]
         view.SurfacePreviewStatus = "Field display disabled; native caps/edges/vertices only"
         if view.ShowImplicitSurface and report["implicit_face_count"]:
@@ -365,24 +414,29 @@ class NativeSolidView(NativeBoundaryView):
                         if error or surface is None:
                             raise ValueError(error or "No initial display candidate")
                     else:
-                        extract = (native.tessellate_mixed_checked if view.CheckSurfaceDisplay
-                                   else native.tessellate_mixed)
-                        surface = extract(source["boundary_handle"], view.SurfaceTolerance.Value,
-                                          view.SurfaceMaximumCells)
-                    groups = component_triangles(surface, report["component_domains"])
-                    self._preview_key, self._preview = preview_key, (surface, groups)
+                        if view.CheckSurfaceDisplay:
+                            from ImplicitSurfaceJobs import scheduler
+                            scheduler().submit(self, preview_key, source["boundary_handle"])
+                            pending = True
+                            view.SurfacePreviewStatus = "Checking display: queued"
+                        else:
+                            surface = native.tessellate_mixed(source["boundary_handle"],
+                                view.SurfaceTolerance.Value, view.SurfaceMaximumCells)
+                    if not pending:
+                        groups = component_triangles(surface, report["component_domains"])
+                        self._preview_key, self._preview = preview_key, (surface, groups)
                 else:
                     surface, groups = self._preview
                 self._mesh = surface
-                checks = surface.get("display_checks")
-                if view.CheckSurfaceDisplay:
+                checks = surface.get("display_checks") if surface else None
+                if view.CheckSurfaceDisplay and not pending:
                     if not checks or not checks["boundary_proximity_resolved"] or not checks["triangle_contacts_clear"]:
                         raise ValueError("Missing same-buffer display checks")
                     checked_status = (
                         "Local binary32 display: two-way proximity <= %g mm, triangle contacts clear; "
                         "NOT topology/solid validation" % checks["distance_tolerance"])
                     view.SurfacePreviewStatus = "Checked source-local buffers; upload pending"
-                else:
+                elif not pending:
                     view.SurfacePreviewStatus = "Transient component-assigned candidate; display coverage NOT validated"
             except Exception as error:
                 surface = None
@@ -404,7 +458,7 @@ class NativeSolidView(NativeBoundaryView):
             self._preview_key = self._preview = None
             view.SurfacePreviewStatus = "Unsupported/failed display upload: " + str(error)
             return
-        self._key = None if preview_failed else key
+        self._key = None if preview_failed or pending else key
         if checked_status is not None:
             view.DisplayProximityChecked = True
             view.SurfacePreviewStatus = checked_status
@@ -442,7 +496,7 @@ class NativeSolidView(NativeBoundaryView):
                 else:
                     tolerance = view.SurfaceTolerance.Value
                     if not math.isfinite(tolerance) or tolerance <= 0:
-                        tolerance = obj.GeometricTolerance.Value
+                        tolerance = view.Object.GeometricTolerance.Value
                     points, triangles = cap.tessellate(tolerance)
                     points = [tuple(p) for p in points]
                 normals = [tuple(cap.normalAt(0, 0))] * len(points)

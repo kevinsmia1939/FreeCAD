@@ -61,11 +61,21 @@ def click(button, press=True):
 
 
 def check(obj, operation, depth):
+    wait_display(obj)
     assert str(obj.Source.Operation) == operation and obj.MaximumGeometryDepth == depth
     assert obj.GeometricTolerance.Value == .1
     assert obj.Geometry is not None and obj.isValid(), obj.BackendStatus
     assert obj.ViewObject.Proxy._mesh, obj.ViewObject.SurfacePreviewStatus
     assert "NativeFace1" in obj.ViewObject.Proxy._elements
+
+
+def wait_display(obj):
+    deadline = time.monotonic() + 90
+    while obj.ViewObject.Proxy._display_pending:
+        assert time.monotonic() < deadline, obj.ViewObject.SurfacePreviewStatus
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
 
 
 def main():
@@ -155,12 +165,14 @@ def main():
     assert task.reject()
     # A real failed solid build must invalidate previously checked display state.
     obj.ViewObject.CheckSurfaceDisplay = True
+    wait_display(obj)
     assert obj.ViewObject.DisplayProximityChecked
     task = edit(obj)
     task.controls["MaximumGeometryCells"].setValue(1)
     assert not task.apply()
     assert not obj.ViewObject.DisplayProximityChecked and obj.ViewObject.Proxy._mesh is None
     assert task.reject()
+    wait_display(obj)
     assert obj.ViewObject.DisplayProximityChecked
     name = obj.Name
     record = native.dumps_mixed_solids(obj.Geometry)
