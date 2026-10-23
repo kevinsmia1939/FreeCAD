@@ -32,6 +32,7 @@ from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, i
                           build_mixed_shells, inspect_mixed_shells, classify_mixed_shells,
                           build_mixed_solids, inspect_mixed_solids, classify_mixed_solids,
                           start_solid_job, solid_job_status, cancel_solid_job, take_solid_job,
+                          start_surface_job, take_surface_job, native_job_status, cancel_native_job,
                           dumps_mixed_solids, loads_mixed_solids,
                           source_mixed_solids as _source_mixed_solids)
 from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed, inspect_mixed as _inspect_mixed

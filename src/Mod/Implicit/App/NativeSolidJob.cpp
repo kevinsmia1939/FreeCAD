@@ -12,7 +12,8 @@
 
 using namespace Implicit;
 
-NativeSolidJob::NativeSolidJob(NativeSolidRequest input): request(std::move(input)) {}
+NativeSolidJob::NativeSolidJob(NativeSolidRequest input)
+    : request(std::move(input)), surfaceJob(request.display.has_value()) {}
 
 bool NativeSolidJob::IsCancelled() const
 {
@@ -70,23 +71,36 @@ void NativeSolidJob::run()
         std::istringstream input(request.boundary);
         BRepClass3d_ImplicitBoxIO::Read(input, boundary);
         auto output = std::make_unique<NativeSolidResult>();
-        output->solid = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>(
-            BRepClass3d_ImplicitBox::BuildNativeSolids(boundary, request.tolerance,
-                request.resolution, request.depth, request.cells, request.tests, request.separators,
-                request.geometryCells, request.segments,
-                request.geometryDepth == -1 ? request.depth : request.geometryDepth));
-        if (!output->solid->Constructed || !output->solid->Validated) {
-            throw std::runtime_error(output->solid->Reason);
-        }
-        BRepClass3d_ImplicitWork::Checkpoint();
-        const auto& parts = output->solid->Boundary.FaceComponents;
-        if (std::any_of(parts.begin(), parts.end(), [](int component) { return component >= 0; })) {
-            try {
-                output->surface = BRepMesh_ImplicitBoundary::Tessellate(output->solid->Boundary.Source, .1);
+        if (request.display) {
+            const auto& display = *request.display;
+            output->surfaceSource = std::make_unique<BRepClass3d_ImplicitBox::Boundary>(std::move(boundary));
+            output->surface = BRepMesh_ImplicitBoundary::Tessellate(*output->surfaceSource,
+                request.tolerance, display.cells, display.nodes, display.triangles);
+            if (display.checked) {
+                output->checks = checkDisplay(*output->surfaceSource, *output->surface,
+                    request.tolerance, display.depth, display.spatial, display.patches,
+                    display.pairs, display.broad);
             }
-            catch (const Standard_AbortiveTransaction&) { throw; }
-            catch (const Standard_Failure& failure) {
-                output->surfaceError = failure.what();
+        }
+        else {
+            output->solid = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>(
+                BRepClass3d_ImplicitBox::BuildNativeSolids(boundary, request.tolerance,
+                    request.resolution, request.depth, request.cells, request.tests, request.separators,
+                    request.geometryCells, request.segments,
+                    request.geometryDepth == -1 ? request.depth : request.geometryDepth));
+            if (!output->solid->Constructed || !output->solid->Validated) {
+                throw std::runtime_error(output->solid->Reason);
+            }
+            BRepClass3d_ImplicitWork::Checkpoint();
+            const auto& parts = output->solid->Boundary.FaceComponents;
+            if (std::any_of(parts.begin(), parts.end(), [](int component) { return component >= 0; })) {
+                try {
+                    output->surface = BRepMesh_ImplicitBoundary::Tessellate(output->solid->Boundary.Source, .1);
+                }
+                catch (const Standard_AbortiveTransaction&) { throw; }
+                catch (const Standard_Failure& failure) {
+                    output->surfaceError = failure.what();
+                }
             }
         }
         BRepClass3d_ImplicitWork::Checkpoint();

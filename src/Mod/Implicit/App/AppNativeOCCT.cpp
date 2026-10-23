@@ -2,6 +2,7 @@
 // Private OCCT 8-only binding. Import through the ABI-checking ImplicitOCCT facade.
 #include <Python.h>
 #include "NativeSolidJob.h"
+#include "CheckedDisplay.h"
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <BRep_ImplicitIO.hxx>
@@ -855,6 +856,37 @@ PyObject* mixedMeshReport(const BRepClass3d_ImplicitBox::Boundary* boundary,
                           const BRepMesh_ImplicitBoundary::Result& mesh,
                           Object displayChecks, Object assignmentVertices);
 
+PyObject* checkedMeshReport(const BRepClass3d_ImplicitBox::Boundary* boundary,
+                           const BRepMesh_ImplicitBoundary::Result& mesh,
+                           const Implicit::CheckedDisplay& checked, double deflection)
+{
+    Object assignmentVertices(PyList_New(checked.assignmentNodes.size()));
+    if (!assignmentVertices) { return nullptr; }
+    for (size_t i = 0; i < checked.assignmentNodes.size(); ++i) {
+        auto* p = xyz(checked.assignmentNodes[i].XYZ());
+        if (!p) { return nullptr; }
+        PyList_SET_ITEM(assignmentVertices.get(), i, p);
+    }
+    const auto& coverage = checked.coverage;
+    const auto& audit = checked.audit;
+    const double uploadBound = checked.uploadBound;
+    Object displayChecks(Py_BuildValue(
+        "{s:O,s:O,s:O,s:O,s:d,s:d,s:d,s:d,s:K,s:K,s:K,s:K,s:s}",
+        "boundary_proximity_resolved", Py_True, "triangle_contacts_clear", Py_True,
+        "topology_validated", Py_False, "solid_validated", Py_False,
+        "distance_tolerance", deflection, "upload_coordinate_bound", uploadBound,
+        "boundary_to_mesh_bound", coverage.BoundaryToMeshBound + uploadBound,
+        "mesh_to_boundary_bound", coverage.MeshToBoundaryBound + uploadBound,
+        "spatial_cells", static_cast<unsigned long long>(coverage.SpatialCells),
+        "triangle_patches", static_cast<unsigned long long>(coverage.TrianglePatches),
+        "pair_tests", static_cast<unsigned long long>(audit.PairTests),
+        "broad_tests", static_cast<unsigned long long>(audit.BroadTests),
+        "coordinate_frame", "source_local_binary32"));
+    if (!displayChecks) { return nullptr; }
+    return mixedMeshReport<true, true>(boundary, mesh,
+        std::move(displayChecks), std::move(assignmentVertices));
+}
+
 template<bool Surface, bool CheckedDisplay = false>
 PyObject* prepareMixedMesh(PyObject* args)
 {
@@ -897,69 +929,9 @@ PyObject* prepareMixedMesh(PyObject* args)
         : BRepMesh_ImplicitBoundary::Prepare(*boundary, deflection, maximumNodes, maximumTriangles);
     Object displayChecks, assignmentVertices;
     if constexpr (CheckedDisplay) {
-        if (!mesh.MeshClosed || !mesh.NativeSurfaceMeshed) {
-            throw Standard_NotImplemented("Checked display requires a closed surface candidate");
-        }
-        // Coin SoCoordinate3 stores binary32, not the native binary64 nodes.
-        // Bound that upload displacement in BOTH proximity directions, and
-        // audit the actual rounded coordinates for collapse/new contacts.
-        auto uploaded = mesh.Nodes;
-        double uploadBound = 0, magnitude = 1;
-        for (size_t i = 0; i < uploaded.size(); ++i) {
-            for (int axis = 1; axis <= 3; ++axis) {
-                const double value = mesh.Nodes[i].Coord(axis);
-                if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max()) {
-                    throw Standard_DomainError("Display coordinate exceeds binary32 range");
-                }
-                magnitude = std::max(magnitude, std::abs(value));
-                uploaded[i].SetCoord(axis, static_cast<double>(static_cast<float>(value)));
-            }
-            uploadBound = std::max(uploadBound, mesh.Nodes[i].Distance(uploaded[i]));
-        }
-        uploadBound += 256 * std::numeric_limits<double>::epsilon() * magnitude;
-        if (!std::isfinite(uploadBound) || !(deflection > 4096 * uploadBound)) {
-            throw Standard_DomainError("Display upload precision exhausted");
-        }
-        const auto coverage = BRepMesh_ImplicitBoundary::CheckCoverage(
-            *boundary, mesh, deflection - uploadBound, depth, size_t(spatial), size_t(patches));
-        if (!coverage.Resolved) {
-            throw Standard_NotImplemented("Checked display clipped proximity unresolved");
-        }
-        assignmentVertices = Object(PyList_New(mesh.Nodes.size()));
-        if (!assignmentVertices) {
-            return nullptr;
-        }
-        for (size_t i = 0; i < mesh.Nodes.size(); ++i) {
-            auto* p = xyz(mesh.Nodes[i].XYZ());
-            if (!p) {
-                return nullptr;
-            }
-            PyList_SET_ITEM(assignmentVertices.get(), i, p);
-        }
-        mesh.Nodes = std::move(uploaded);
-        const auto audit = BRepMesh_ImplicitBoundary::Audit(mesh, size_t(pairs), size_t(broad));
-        using State = BRepMesh_ImplicitBoundary::MeshAudit::State;
-        if (audit.Status != State::Clear) {
-            throw Standard_NotImplemented(audit.Status == State::Limit
-                ? "Checked display contact audit budget exhausted"
-                : "Checked display upload creates triangle contacts or degeneracies");
-        }
-        mesh.FieldDistanceBound += uploadBound;
-        displayChecks = Object(Py_BuildValue(
-            "{s:O,s:O,s:O,s:O,s:d,s:d,s:d,s:d,s:K,s:K,s:K,s:K,s:s}",
-            "boundary_proximity_resolved", Py_True, "triangle_contacts_clear", Py_True,
-            "topology_validated", Py_False, "solid_validated", Py_False,
-            "distance_tolerance", deflection, "upload_coordinate_bound", uploadBound,
-            "boundary_to_mesh_bound", coverage.BoundaryToMeshBound + uploadBound,
-            "mesh_to_boundary_bound", coverage.MeshToBoundaryBound + uploadBound,
-            "spatial_cells", static_cast<unsigned long long>(coverage.SpatialCells),
-            "triangle_patches", static_cast<unsigned long long>(coverage.TrianglePatches),
-            "pair_tests", static_cast<unsigned long long>(audit.PairTests),
-            "broad_tests", static_cast<unsigned long long>(audit.BroadTests),
-            "coordinate_frame", "source_local_binary32"));
-        if (!displayChecks) {
-            return nullptr;
-        }
+        const auto checked = Implicit::checkDisplay(*boundary, mesh, deflection, depth,
+            size_t(spatial), size_t(patches), size_t(pairs), size_t(broad));
+        return checkedMeshReport(boundary, mesh, checked, deflection);
     }
     return mixedMeshReport<Surface, CheckedDisplay>(boundary, mesh,
         std::move(displayChecks), std::move(assignmentVertices));
@@ -1784,6 +1756,54 @@ SolidJobPtr readSolidJob(PyObject* args)
     return *static_cast<SolidJobPtr*>(PyCapsule_GetPointer(object, solidJobName));
 }
 
+PyObject* submitNativeJob(PyObject* object, Implicit::NativeSolidRequest request)
+{
+    if (!PyCapsule_IsValid(object, boundaryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an immutable native hybrid-boundary handle");
+        return nullptr;
+    }
+    const auto* source = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
+        PyCapsule_GetPointer(object, boundaryName));
+    std::ostringstream output;
+    BRepClass3d_ImplicitBoxIO::Write(*source, output);
+    request.boundary = output.str();
+    auto job = std::make_unique<SolidJobPtr>(Implicit::submitNativeSolid(std::move(request)));
+    PyObject* capsule = PyCapsule_New(job.get(), solidJobName, destroySolidJob);
+    if (!capsule) {
+        (*job)->cancel();
+        return nullptr;
+    }
+    job.release();
+    return capsule;
+}
+
+PyObject* startSurfaceJob(PyObject* args)
+{
+    PyObject* object;
+    Implicit::NativeSolidRequest request;
+    Implicit::NativeSurfaceRequest display;
+    int checked = 0;
+    unsigned long long spatial = display.spatial, patches = display.patches,
+                       pairs = display.pairs, broad = display.broad;
+    if (!PyArg_ParseTuple(args, "O|diiipiKKKK", &object, &request.tolerance,
+            &display.cells, &display.nodes, &display.triangles, &checked, &display.depth,
+            &spatial, &patches, &pairs, &broad)) { return nullptr; }
+    if (!std::isfinite(request.tolerance) || request.tolerance < 1.e-7
+        || display.cells < 8 || display.cells > 256 || display.nodes < 3 || display.nodes > 1000000
+        || display.triangles < 1 || display.triangles > 2000000 || display.depth < 1 || display.depth > 20
+        || !spatial || spatial > 10000000 || !patches || patches > 4000000
+        || !pairs || pairs > 10000000 || !broad || broad > 100000000) {
+        throw Standard_DomainError("Invalid native display job settings");
+    }
+    display.checked = bool(checked);
+    display.spatial = size_t(spatial);
+    display.patches = size_t(patches);
+    display.pairs = size_t(pairs);
+    display.broad = size_t(broad);
+    request.display = display;
+    return submitNativeJob(object, std::move(request));
+}
+
 PyObject* startSolidJob(PyObject* args)
 {
     PyObject* object;
@@ -1812,19 +1832,7 @@ PyObject* startSolidJob(PyObject* args)
     request.separators = size_t(separators);
     request.geometryCells = size_t(geometryCells);
     request.segments = size_t(segments);
-    const auto* source = static_cast<const BRepClass3d_ImplicitBox::Boundary*>(
-        PyCapsule_GetPointer(object, boundaryName));
-    std::ostringstream output;
-    BRepClass3d_ImplicitBoxIO::Write(*source, output);
-    request.boundary = output.str();
-    auto job = std::make_unique<SolidJobPtr>(Implicit::submitNativeSolid(std::move(request)));
-    PyObject* capsule = PyCapsule_New(job.get(), solidJobName, destroySolidJob);
-    if (!capsule) {
-        (*job)->cancel();
-        return nullptr;
-    }
-    job.release();
-    return capsule;
+    return submitNativeJob(object, std::move(request));
 }
 
 PyObject* solidJobStatus(PyObject* args)
@@ -1834,7 +1842,8 @@ PyObject* solidJobStatus(PyObject* args)
     const auto status = job->status();
     constexpr const char* states[] = {"queued", "running", "ready", "failed", "cancelled", "consumed"};
     constexpr const char* phases[] = {"copying", "topology", "cap_attachment", "trim_attachment",
-                                     "shell_assembly", "geometry", "solid_assembly", "meshing"};
+                                     "shell_assembly", "geometry", "solid_assembly", "meshing",
+                                     "coverage", "contact_audit"};
     const char* state = status.cancelling && status.state == Implicit::NativeSolidJob::State::Running
         ? "cancelling" : states[static_cast<int>(status.state)];
     return Py_BuildValue("{s:s,s:s,s:K,s:s}", "state", state,
@@ -1854,6 +1863,10 @@ PyObject* takeSolidJob(PyObject* args)
 {
     const auto job = readSolidJob(args);
     if (!job) { return nullptr; }
+    if (job->isSurfaceJob()) {
+        PyErr_SetString(PyExc_TypeError, "expected a solid-construction job");
+        return nullptr;
+    }
     auto data = job->take();
     Object result(nativeSolidReport(*data->solid));
     if (!result) { return nullptr; }
@@ -1883,6 +1896,34 @@ PyObject* takeSolidJob(PyObject* args)
     if (!capsule) { return nullptr; }
     data->solid.release();
     if (!set(result.get(), "solid_handle", capsule.release())) { return nullptr; }
+    return result.release();
+}
+
+PyObject* takeSurfaceJob(PyObject* args)
+{
+    const auto job = readSolidJob(args);
+    if (!job) { return nullptr; }
+    if (!job->isSurfaceJob()) {
+        PyErr_SetString(PyExc_TypeError, "expected a display job");
+        return nullptr;
+    }
+    auto data = job->take();
+    const auto& input = data->request;
+    const auto& display = *input.display;
+    Object surface(data->checks
+        ? checkedMeshReport(data->surfaceSource.get(), *data->surface, *data->checks, input.tolerance)
+        : mixedMeshReport<true, false>(data->surfaceSource.get(), *data->surface, {}, {}));
+    if (!surface) { return nullptr; }
+    Object settings(Py_BuildValue("(diiiOiKKKK)", input.tolerance, display.cells, display.nodes,
+        display.triangles, display.checked ? Py_True : Py_False, display.depth,
+        static_cast<unsigned long long>(display.spatial), static_cast<unsigned long long>(display.patches),
+        static_cast<unsigned long long>(display.pairs), static_cast<unsigned long long>(display.broad)));
+    Object result(PyDict_New());
+    if (!settings || !result
+        || !set(result.get(), "surface", surface.release())
+        || !set(result.get(), "input_settings", settings.release())
+        || !set(result.get(), "input_record", PyUnicode_FromStringAndSize(
+            input.boundary.data(), Py_ssize_t(input.boundary.size())))) { return nullptr; }
     return result.release();
 }
 
@@ -2451,6 +2492,15 @@ PyMethodDef methods[] = {
      "solids. Explicitly rebuild/recheck using this source; source flags are not proof."},
     {"start_solid_job", checked<startSolidJob>, METH_VARARGS,
      "Start a bounded native solid/initial-display job from a private boundary snapshot."},
+    {"start_surface_job", checked<startSurfaceJob>, METH_VARARGS,
+     "start_surface_job(boundary, tolerance=.1, cells=256, nodes=200000, triangles=400000, "
+     "checked=False, depth=14, spatial=2000000, patches=1000000, pairs=2000000, broad=50000000)"},
+    {"take_surface_job", checked<takeSurfaceJob>, METH_VARARGS,
+     "Consume a display job once: surface, input_record and input_settings."},
+    {"native_job_status", checked<solidJobStatus>, METH_VARARGS,
+     "Read native solid/display work state, phase and checkpoint count."},
+    {"cancel_native_job", checked<cancelSolidJob>, METH_VARARGS,
+     "Request cooperative cancellation of a native solid/display job."},
     {"solid_job_status", checked<solidJobStatus>, METH_VARARGS,
      "Read native work state, phase and checkpoint count without waiting."},
     {"cancel_solid_job", checked<cancelSolidJob>, METH_VARARGS,
