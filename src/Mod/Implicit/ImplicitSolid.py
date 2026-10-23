@@ -63,6 +63,10 @@ class NativeSolid:
 
     @staticmethod
     def _ensure_settings(obj):
+        if "BackgroundRecompute" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyBool", "BackgroundRecompute", "Native solid",
+                            "Queue GUI property rebuilds; geometry is unavailable until completion")
+            obj.BackgroundRecompute = False
         if "MaximumGeometryDepth" not in obj.PropertiesList:
             obj.addProperty("App::PropertyInteger", "MaximumGeometryDepth", "Native solid",
                             "Independent cap geometry depth: -1 inherits MaximumDepth; otherwise 1 to 24")
@@ -126,13 +130,21 @@ class NativeSolid:
 
     def execute(self, obj):
         import ImplicitOCCT as native
-        if getattr(self, "_pending_job", None) is not None:
+        if (getattr(self, "_pending_job", None) is not None
+                and getattr(self, "_recompute_request", None) is None):
             obj.BackendStatus = "Pending native solid background preview"
             return
         try:
+            if (getattr(self, "_recompute_request", None) is not None
+                    and not obj.BackgroundRecompute):
+                from ImplicitSolidRecompute import scheduler
+                scheduler().cancel(obj)
             if self._restore_failed:
                 raise RuntimeError("Native solid restoration failed; explicit Proxy.rebuild(obj) required")
             record, settings, fingerprint = self._inputs(obj)
+            if App.GuiUp and obj.BackgroundRecompute:
+                from ImplicitSolidRecompute import live_source
+                live_source(obj.Source)
             if obj.Geometry is not None and obj.InputFingerprint == fingerprint:
                 stored = native.source_mixed_solids(obj.Geometry)
                 report = native.inspect_mixed_solids(obj.Geometry)
@@ -141,6 +153,10 @@ class NativeSolid:
                     self._restore_failed = True
                     raise ValueError("Stored solid disagrees with unchanged source/settings; explicit rebuild required")
             else:
+                if App.GuiUp and obj.BackgroundRecompute:
+                    from ImplicitSolidRecompute import scheduler
+                    scheduler().submit(obj, (record, settings, fingerprint))
+                    return
                 result = native.build_mixed_solids(obj.Source.Geometry, *settings)
                 if not result["solid_validated"] or "solid_handle" not in result:
                     raise ValueError("Native solid unresolved: " + result["reason"])
@@ -153,6 +169,9 @@ class NativeSolid:
             self._placement(obj)
             self._refresh(obj)
         except Exception as error:
+            if App.GuiUp and getattr(self, "_recompute_request", None) is not None:
+                from ImplicitSolidRecompute import scheduler
+                scheduler().cancel(obj)
             self._publishing = True
             try:
                 obj.Geometry = None
@@ -194,6 +213,7 @@ class NativeSolid:
         self._publishing = False
         self._restore_failed = False
         self._pending_job = None
+        self._recompute_request = None
 
     def publish(self, obj, completed):
         """Publish a fresh matching worker result on the document's thread."""

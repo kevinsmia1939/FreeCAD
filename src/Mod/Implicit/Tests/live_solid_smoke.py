@@ -57,6 +57,8 @@ def main():
     assert App.getActiveTransaction() == transaction
     doc.abortTransaction()
     obj = ImplicitSolid.create(boundary)
+    assert not App.GuiUp
+    obj.BackgroundRecompute = True  # Headless recompute retains synchronous semantics.
     check(obj)
     assert obj.TypeId == "Implicit::NativeSolidFeaturePython" and "Shape" not in obj.PropertiesList
     first = native.dumps_mixed_solids(obj.Geometry)
