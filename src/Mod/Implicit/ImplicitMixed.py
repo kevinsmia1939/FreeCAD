@@ -161,7 +161,11 @@ class MixedBoundary:
         self._display(obj, data)
         obj.NativeRevision += 1
 
-    def execute(self, obj):
+    def execute(self, obj, background=None):
+        if (getattr(self, "_pending_job", None) is not None
+                and getattr(self, "_recompute_request", None) is None):
+            obj.BackendStatus = "Pending native source task preview"
+            return
         self._boundary = self._mesh = self._section = None
         obj.SeamCount = obj.PlanarCapCount = 0
         if "BoxEdgeRootCount" not in obj.PropertiesList:
@@ -178,9 +182,10 @@ class MixedBoundary:
             if obj.MixedSchema not in (1, 2):
                 raise ValueError("Unsupported native mixed-boundary schema")
             self._ensure_geometry(obj)
+            use_background = App.GuiUp and (obj.BackgroundRecompute if background is None else bool(background))
             obj.MixedSchema = 2
             if (getattr(self, "_recompute_request", None) is not None
-                    and not obj.BackgroundRecompute):
+                    and not use_background):
                 from ImplicitMixedRecompute import scheduler
                 scheduler().cancel(obj)
             field, box = self._validate_operands(obj)
@@ -200,7 +205,7 @@ class MixedBoundary:
                     self._restore_failed = True
                     raise ValueError("Stored native geometry disagrees with unchanged inputs; explicit rebuild required")
             else:
-                if App.GuiUp and obj.BackgroundRecompute:
+                if use_background:
                     from ImplicitMixedRecompute import scheduler
                     scheduler().submit(obj, fingerprint)
                     return
@@ -269,7 +274,11 @@ class MixedBoundary:
                     setattr(obj, name, 0)
             if "SeamBoundVerified" in obj.PropertiesList:
                 obj.SeamBoundVerified = False
-            if "InputFingerprint" in obj.PropertiesList:
+            # Undo/rollback restores the geometry/fingerprint pair itself.
+            # Clearing the fingerprint here makes restoration order-dependent
+            # and forces a numerical retrace of otherwise unchanged topology.
+            if ("InputFingerprint" in obj.PropertiesList
+                    and not getattr(obj.Document, "Transacting", False)):
                 obj.InputFingerprint = ""
             if "NativeRevision" in obj.PropertiesList:
                 obj.NativeRevision += 1
@@ -627,6 +636,8 @@ class MixedBoundaryTaskPanel:
         self.document_name = obj.Document.Name
         self.transaction = 0
         self.closed = False
+        self.batch = None
+        self.accept_when_ready = False
         self.form = QtWidgets.QWidget()
         self.form.setObjectName("ImplicitMixedBoundaryEditor")
         self.form.setWindowTitle("Edit native mixed boundary")
@@ -644,6 +655,8 @@ class MixedBoundaryTaskPanel:
         self.tolerance.setRange(.000001, 1000000)
         self.tolerance.setSuffix(" mm")
         self.tolerance.setValue(obj.GeometricTolerance.Value)
+        self.tolerance._initial_numeric = obj.GeometricTolerance.Value
+        self.tolerance._initial_shown = self.tolerance.value()
         self.cells = QtWidgets.QComboBox()
         budgets = [str(1 << power) for power in range(2, 10)]
         self.cells.addItems(budgets)
@@ -664,6 +677,56 @@ class MixedBoundaryTaskPanel:
         self.status.setWordWrap(True)
         layout.addRow(self.status)
 
+        self.timer = QtCore.QTimer(self.form)
+        self.timer.setInterval(50)
+        self.timer.timeout.connect(self._poll_preview)
+        self.form.destroyed.connect(self._destroyed_preview)
+        App.addDocumentObserver(self)
+
+    def _destroyed_preview(self, *_args):
+        if self.batch is not None:
+            self.batch.cancel()
+            self.batch = None
+        App.removeDocumentObserver(self)
+
+    def slotDeletedDocument(self, doc):
+        if doc.Name == self.document_name:
+            self.timer.stop()
+            self._destroyed_preview()
+            self.closed = True
+
+    def _control_signature(self):
+        return self.operation.currentText(), self.tolerance.value(), self.cells.currentText()
+
+    def _poll_preview(self):
+        if self.closed or self.batch is None:
+            self.timer.stop()
+            return
+        if self._preview_controls != self._control_signature():
+            self.batch.error = "Preview settings changed; Apply again"
+            self.batch.cancel()
+        state = self.batch.step()
+        if state == "pending":
+            self.status.setText("Background preview " + self.batch.phase)
+            return
+        batch, self.batch = self.batch, None
+        self.timer.stop()
+        if state != "ready":
+            self.accept_when_ready = False
+            self.status.setText("Preview failed: " + (batch.error or state))
+            return
+        try:
+            self.obj.Document.recompute()
+            if self.obj.Geometry is None or not self.obj.isValid():
+                raise RuntimeError(self.obj.BackendStatus)
+            self.status.setText(self.obj.BackendStatus)
+            if self.accept_when_ready:
+                self.accept_when_ready = False
+                self.finish(True)
+        except Exception as error:
+            self.accept_when_ready = False
+            self.status.setText("Preview failed: " + str(error))
+
     def getStandardButtons(self):
         from PySide import QtWidgets
         buttons = QtWidgets.QDialogButtonBox
@@ -678,13 +741,20 @@ class MixedBoundaryTaskPanel:
     def isAllowedAlterSelection(self):
         return True
 
-    def apply(self):
+    def apply(self, background=False):
         if self.closed:
             return False
+        if self.batch is not None:
+            self.batch.cancel()
+            self.batch = None
+            self.timer.stop()
+        editing_started = False
         try:
             doc = App.getDocument(self.document_name)
             if doc is None or self.obj.Document != doc:
                 raise RuntimeError("The edited document is no longer available")
+            if self.obj.Proxy._restore_failed:
+                raise ValueError("Repair restored source explicitly before editing")
             cells = int(self.cells.currentText())
             if cells < 4 or cells > 512 or cells & (cells - 1):
                 raise ValueError("Tracing budget must be a power of two from 4 to 512")
@@ -696,31 +766,63 @@ class MixedBoundaryTaskPanel:
                 raise RuntimeError("Finish the existing transaction before applying native edits")
             else:
                 self.transaction = App.setActiveTransaction("Edit native mixed boundary", True)
+            if any(item.Document != doc for item in self.obj.InListRecursive):
+                raise ValueError("Cross-document source task editing is not supported")
+            editing_started = True
             self.obj.Operation = self.operation.currentText()
-            self.obj.GeometricTolerance = self.tolerance.value()
+            self.obj.GeometricTolerance = (self.tolerance._initial_numeric
+                if self.tolerance.value() == self.tolerance._initial_shown else self.tolerance.value())
             self.obj.MaximumCells = cells
             # Catch numerical preview errors here so the task stays usable.
             # execute clears geometry/display on failure. A successful normal
             # recompute reuses the published snapshot and updates dependencies.
-            self.obj.Proxy.execute(self.obj)
+            if background:
+                from ImplicitTaskBatch import PreparedSolidBatch
+                from ImplicitSolid import NativeSolid
+                targets = [item for item in doc.Objects
+                           if isinstance(getattr(item, "Proxy", None), NativeSolid)
+                           and item.Source == self.obj]
+                batch = PreparedSolidBatch([self.obj], targets, self.transaction)
+                if batch.state == "pending":
+                    self.batch = batch
+                    self._preview_controls = self._control_signature()
+                    self.status.setText("Background source preview queued; Cancel restores the edit")
+                    self.timer.start()
+                    return False
+            else:
+                from ImplicitSourceEdit import rebuild
+                rebuild([self.obj])
             doc.recompute()
             if not self.obj.isValid() or self.obj.Geometry is None:
                 raise RuntimeError(self.obj.BackendStatus)
             self.status.setText(self.obj.BackendStatus)
             return True
         except Exception as error:
+            active = App.getActiveTransaction()
+            if editing_started and active and active[1] == self.transaction:
+                from ImplicitSourceEdit import invalidate
+                invalidate([self.obj])
+                self.obj.BackendStatus = "Preview failed: " + str(error)
             self.status.setText("Preview failed: " + str(error))
             return False
 
     def clicked(self, button):
         from PySide import QtWidgets
         if button == QtWidgets.QDialogButtonBox.Apply:
-            self.apply()
+            self.accept_when_ready = False
+            self.apply(background=True)
 
     def accept(self):
-        if not self.apply():
+        if self.batch is not None:
+            self.accept_when_ready = True
             return False
-        return self.finish(True)
+        self.accept_when_ready = True
+        if self.apply(background=True):
+            self.accept_when_ready = False
+            return self.finish(True)
+        if self.batch is None:
+            self.accept_when_ready = False
+        return False
 
     def reject(self):
         return self.finish(False)
@@ -728,6 +830,12 @@ class MixedBoundaryTaskPanel:
     def finish(self, commit, reset_edit=True):
         if self.closed:
             return True
+        if commit and self.batch is not None:
+            return False
+        if self.batch is not None:
+            self.batch.cancel()
+            self.batch = None
+        self.timer.stop()
         active = App.getActiveTransaction()
         owned = self.transaction and active and active[1] == self.transaction
         if active and not owned:
@@ -742,6 +850,7 @@ class MixedBoundaryTaskPanel:
         if reset_edit and doc is not None:
             import FreeCADGui as Gui
             Gui.getDocument(self.document_name).resetEdit()
+        App.removeDocumentObserver(self)
         return True
 
 

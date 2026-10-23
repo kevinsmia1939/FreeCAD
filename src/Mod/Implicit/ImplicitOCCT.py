@@ -57,8 +57,16 @@ def start_boundary_job(field, box, operation="common", tolerance=.1, maximum_cel
     """Private source preparation; no document/Part objects enter the worker."""
     if not isinstance(box, Part.Shape):
         raise TypeError("box must be a conventional Part.Shape")
-    return _start_boundary_job(field, box.exportBrepToString(), operation, tolerance,
-                               maximum_cells, corner_policy)
+    return start_boundary_job_from_record(field, box.exportBrepToString(), operation,
+                                          tolerance, maximum_cells, corner_policy)
+
+
+def start_boundary_job_from_record(field, box_record, operation="common", tolerance=.1,
+                                   maximum_cells=512, corner_policy="reject"):
+    """Submit an already captured conventional B-Rep record without copying/re-encoding it."""
+    if not isinstance(box_record, str):
+        raise TypeError("box_record must be a conventional B-Rep string")
+    return _start_boundary_job(field, box_record, operation, tolerance, maximum_cells, corner_policy)
 
 
 def take_boundary_job(job):

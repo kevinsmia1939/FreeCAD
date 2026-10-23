@@ -128,14 +128,14 @@ class NativeSolid:
             parent = obj.getGlobalPlacement().multiply(obj.Placement.inverse())
             obj.Placement = parent.inverse().multiply(obj.Source.getGlobalPlacement())
 
-    def execute(self, obj):
+    def execute(self, obj, background=None):
         import ImplicitOCCT as native
         if (getattr(self, "_pending_job", None) is not None
                 and getattr(self, "_recompute_request", None) is None):
             obj.BackendStatus = "Pending native solid background preview"
             return
         if (obj.Source is not None and getattr(getattr(obj.Source, "Proxy", None),
-                                              "_recompute_request", None) is not None):
+                                              "_pending_job", None) is not None):
             if getattr(self, "_recompute_request", None) is not None:
                 from ImplicitSolidRecompute import scheduler
                 scheduler().cancel(obj)
@@ -145,14 +145,16 @@ class NativeSolid:
             obj.BackendStatus = "Pending native boundary preparation"
             return
         try:
+            use_background = App.GuiUp and (getattr(obj, "BackgroundRecompute", False)
+                                            if background is None else bool(background))
             if (getattr(self, "_recompute_request", None) is not None
-                    and not obj.BackgroundRecompute):
+                    and not use_background):
                 from ImplicitSolidRecompute import scheduler
                 scheduler().cancel(obj)
             if self._restore_failed:
                 raise RuntimeError("Native solid restoration failed; explicit Proxy.rebuild(obj) required")
             record, settings, fingerprint = self._inputs(obj)
-            if App.GuiUp and obj.BackgroundRecompute:
+            if use_background:
                 from ImplicitSolidRecompute import live_source
                 live_source(obj.Source)
             if obj.Geometry is not None and obj.InputFingerprint == fingerprint:
@@ -163,7 +165,7 @@ class NativeSolid:
                     self._restore_failed = True
                     raise ValueError("Stored solid disagrees with unchanged source/settings; explicit rebuild required")
             else:
-                if App.GuiUp and obj.BackgroundRecompute:
+                if use_background:
                     from ImplicitSolidRecompute import scheduler
                     scheduler().submit(obj, (record, settings, fingerprint))
                     return
@@ -700,7 +702,7 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             "Apply previews one owned transaction; Cancel restores it. Changing the source "
             "operation or input parameters affects all linked native results. Existing custom "
             "expressions are never replaced; cross-document input edits are unsupported. Geometry depth does not relax "
-            "the physical tolerance. Display checks are separate and synchronous. "
+            "the physical tolerance. Source and solid previews run in the background; display checks are separate. "
             "This is a restricted native solid, not a Part shape.")
         note.setWordWrap(True)
         layout.addRow(note)
@@ -809,6 +811,9 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
                 raise RuntimeError("The edited document is no longer available")
             if self.obj.Source != self.source:
                 raise RuntimeError("Source changed; cancel and reopen the editor")
+            if (self.obj.Proxy._restore_failed
+                    or (self.edit_operation and self.source.Proxy._restore_failed)):
+                raise ValueError("Repair restored native geometry explicitly before editing")
             resolution = int(self.resolution.currentText())
             if resolution < 4 or resolution > 64 or resolution & (resolution - 1):
                 raise ValueError("Topology resolution must be a power of two from 4 to 64")
@@ -845,21 +850,13 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             if self.edit_operation and self.source not in affected:
                 affected.append(self.source)
             if background:
-                from ImplicitSolidBatch import SolidBatch
-                for source in affected:
-                    source.Proxy.execute(source)
+                from ImplicitTaskBatch import PreparedSolidBatch
                 targets = [item for item in doc.Objects
                            if isinstance(getattr(item, "Proxy", None), NativeSolid)
                            and (item == self.obj or item.Source in affected)]
-                pending = []
-                for item in targets:
-                    if (item.Geometry is not None
-                            and item.InputFingerprint == item.Proxy._inputs(item)[2]):
-                        item.Proxy.execute(item)  # Verify unchanged snapshots, without revalidation.
-                    else:
-                        pending.append(item)
-                if pending:
-                    self.batch = SolidBatch(pending, self.transaction)
+                batch = PreparedSolidBatch(affected, targets, self.transaction)
+                if batch.state == "pending":
+                    self.batch = batch
                     self._preview_controls = self._control_signature()
                     self.status.setText("Background preview queued; Cancel restores the edit")
                     self.timer.start()
@@ -867,7 +864,7 @@ class NativeSolidTaskPanel(MixedBoundaryTaskPanel):
             else:
                 rebuild(affected)
             if self.source not in affected:
-                self.obj.Proxy.execute(self.obj)
+                self.obj.Proxy.execute(self.obj, background=False)
             doc.recompute()
             if not self.obj.isValid() or self.obj.Geometry is None:
                 raise RuntimeError(self.obj.BackendStatus)

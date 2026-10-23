@@ -15,13 +15,20 @@ class Request:
         self.operands = field, box
         self.face = native.gyroid(field.Period.Value, field.IsoValue, tuple(field.DomainMin),
                                   tuple(field.DomainMax), obj.GeometricTolerance.Value)
-        self.box = box.Shape.copy()
-        self.field_record, self.box_record = native.dumps(self.face), self.box.exportBrepToString()
+        self.field_record, self.box_record = native.dumps(self.face), box.Shape.exportBrepToString()
         self.settings = ("common" if str(obj.Operation) == "Common" else "box_minus_field",
                          obj.GeometricTolerance.Value, obj.MaximumCells, str(obj.CornerPolicy).lower())
         active = App.getActiveTransaction()
         self.transaction = active[1] if active else None
         self.job = None
+
+
+def same_inputs(request):
+    obj, proxy = request.obj, request.proxy
+    proxy._validate_operands(obj)
+    return (not proxy._restore_failed and request.operands == (obj.Field, obj.Box)
+            and proxy._fingerprint(obj) == request.inputs
+            and all(leaf.isValid() and "Touched" not in leaf.State for leaf in obj.OutListRecursive))
 
 
 class Scheduler(SolidScheduler):
@@ -61,13 +68,7 @@ class Scheduler(SolidScheduler):
 
     @staticmethod
     def current(request):
-        obj, proxy = request.obj, request.proxy
-        proxy._validate_operands(obj)
-        return (obj.BackgroundRecompute and not proxy._restore_failed
-                and request.operands == (obj.Field, obj.Box)
-                and proxy._fingerprint(obj) == request.inputs
-                and all(leaf.isValid() and "Touched" not in leaf.State
-                        for leaf in obj.OutListRecursive))
+        return request.obj.BackgroundRecompute and same_inputs(request)
 
     def _poll(self):
         for request in list(self.requests.values()):
@@ -85,7 +86,8 @@ class Scheduler(SolidScheduler):
                     raise ValueError("Native boundary inputs changed; recompute again")
                 if request.job is None:
                     try:
-                        request.job = native.start_boundary_job(request.face, request.box, *request.settings)
+                        request.job = native.start_boundary_job_from_record(request.face, request.box_record,
+                                                                            *request.settings)
                     except RuntimeError as error:
                         if "queue is full" in str(error):
                             continue

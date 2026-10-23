@@ -21,7 +21,8 @@ def source_signature(source):
 
 
 class SolidBatch:
-    def __init__(self, objects, transaction):
+    status_kind = "solid"
+    def __init__(self, objects, transaction, *, defer_start=False):
         self.objects = list(dict.fromkeys(objects))
         if not self.objects:
             raise ValueError("A native solid batch requires at least one owner")
@@ -48,7 +49,8 @@ class SolidBatch:
                 obj.Geometry = None
                 obj.InputFingerprint = ""
                 obj.BackendStatus = "Pending native solid background preview"
-            self._start()
+            if not defer_start:
+                self._start()
         except Exception:
             self.cancel()
             raise
@@ -89,7 +91,7 @@ class SolidBatch:
                     if owned:
                         obj.Geometry = None
                         obj.InputFingerprint = ""
-                        obj.BackendStatus = "Native solid preview cancelled or failed"
+                        obj.BackendStatus = "Native %s preview cancelled or failed" % self.status_kind
             except (RuntimeError, ReferenceError):
                 pass  # Document/object may already have been deleted.
         if self.state == "pending":
@@ -100,21 +102,26 @@ class SolidBatch:
             return self.state
         try:
             self._check()
+            if self.job is None:
+                try:
+                    self._start()
+                except RuntimeError as error:
+                    if "queue is full" in str(error):
+                        return self.state
+                    raise
             status = native.solid_job_status(self.job)
             self.phase = "%d/%d: %s" % (len(self.results) + 1, len(self.objects), status["phase"])
             if status["state"] in ("queued", "running", "cancelling"):
                 return self.state
             if status["state"] != "ready":
                 raise RuntimeError(status["error"] or status["state"])
-            self.results.append(native.take_solid_job(self.job))
+            self.results.append(self._take())
             self.job = None
             if len(self.results) < len(self.objects):
-                self._start()
                 return self.state
             self._check()
             # Publish only after all peers succeeded and all descriptors match.
-            for obj, result in zip(self.objects, self.results):
-                obj.Proxy.publish(obj, result)
+            self._publish()
             self._check()
             for obj in self.objects:
                 obj.Proxy._pending_job = None
@@ -125,3 +132,10 @@ class SolidBatch:
             self.cancel()
             self.state = "failed"
         return self.state
+
+    def _take(self):
+        return native.take_solid_job(self.job)
+
+    def _publish(self):
+        for obj, result in zip(self.objects, self.results):
+            obj.Proxy.publish(obj, result)

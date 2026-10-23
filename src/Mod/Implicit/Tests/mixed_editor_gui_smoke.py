@@ -3,6 +3,7 @@
 import os
 import tempfile
 import traceback
+import time
 import FreeCAD as App
 import FreeCADGui as Gui
 import Implicit
@@ -28,13 +29,27 @@ def state(obj, operation, tolerance):
 
 
 def click(button):
-    from PySide import QtWidgets
+    from PySide import QtCore, QtWidgets
     Gui.updateGui()
     boxes = [box for box in Gui.getMainWindow().findChildren(QtWidgets.QDialogButtonBox)
              if box.isVisible() and box.button(button) is not None]
     assert len(boxes) == 1, "missing or ambiguous task buttons"
+    tasks = [getattr(getattr(item.ViewObject, "Proxy", None), "_task", None)
+             for item in App.ActiveDocument.Objects]
+    task = next(item for item in tasks if item is not None)
     boxes[0].button(button).click()
     Gui.updateGui()
+    wait_task(task)
+
+
+def wait_task(task):
+    from PySide import QtCore
+    deadline = time.monotonic() + 90
+    while task.batch is not None:
+        assert time.monotonic() < deadline, task.status.text()
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(20, loop.quit)
+        loop.exec()
 
 
 def main():
@@ -131,7 +146,9 @@ def main():
         task = obj.ViewObject.Proxy._task
         assert task is not None and Gui.Control.activeDialog()
         task.operation.setCurrentText("Common")
-        assert task.accept()
+        assert not task.accept() and task.batch is not None
+        wait_task(task)
+        assert task.closed and not Gui.Control.activeDialog()
         state(obj, "Common", .08)
         task = edit(obj)
         task.operation.setCurrentText("BoxMinusField")

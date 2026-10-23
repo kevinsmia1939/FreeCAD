@@ -10,7 +10,7 @@ if(ENABLE_DEVELOPER_TESTS)
     add_subdirectory(Tests)
 endif()
 
-set(Implicit_Scripts Init.py ImplicitCommands.py ImplicitWorkbench.py ImplicitPatch.py ImplicitNative.py ImplicitSection.py ImplicitOCCT.py ImplicitMixed.py ImplicitSolid.py ImplicitSourceEdit.py ImplicitSolidCreate.py ImplicitSolidBatch.py ImplicitSurfaceJobs.py ImplicitSolidRecompute.py ImplicitMixedRecompute.py Resources/icons/ImplicitGyroid.svg)
+set(Implicit_Scripts Init.py ImplicitCommands.py ImplicitWorkbench.py ImplicitPatch.py ImplicitNative.py ImplicitSection.py ImplicitOCCT.py ImplicitMixed.py ImplicitSolid.py ImplicitSourceEdit.py ImplicitSolidCreate.py ImplicitSolidBatch.py ImplicitSurfaceJobs.py ImplicitSolidRecompute.py ImplicitMixedRecompute.py ImplicitTaskBatch.py Resources/icons/ImplicitGyroid.svg)
 
 add_custom_target(ImplicitScripts ALL SOURCES ${Implicit_Scripts})
 
@@ -19,5 +19,5 @@ fc_target_copy_resource(ImplicitScripts
     ${CMAKE_BINARY_DIR}/Mod/Implicit
     ${Implicit_Scripts})
 
-install(FILES Init.py ImplicitCommands.py ImplicitWorkbench.py ImplicitPatch.py ImplicitNative.py ImplicitSection.py ImplicitOCCT.py ImplicitMixed.py ImplicitSolid.py ImplicitSourceEdit.py ImplicitSolidCreate.py ImplicitSolidBatch.py ImplicitSurfaceJobs.py ImplicitSolidRecompute.py ImplicitMixedRecompute.py DESTINATION Mod/Implicit)
+install(FILES Init.py ImplicitCommands.py ImplicitWorkbench.py ImplicitPatch.py ImplicitNative.py ImplicitSection.py ImplicitOCCT.py ImplicitMixed.py ImplicitSolid.py ImplicitSourceEdit.py ImplicitSolidCreate.py ImplicitSolidBatch.py ImplicitSurfaceJobs.py ImplicitSolidRecompute.py ImplicitMixedRecompute.py ImplicitTaskBatch.py DESTINATION Mod/Implicit)
 install(FILES Resources/icons/ImplicitGyroid.svg DESTINATION Mod/Implicit/Resources/icons)

@@ -44,13 +44,13 @@ def rebuild(sources):
     errors = []
     for source in sources:
         try:
-            source.Proxy.execute(source)
+            source.Proxy.execute(source, background=False)
         except Exception as error:
             errors.append(source.Name + ": " + str(error))
     for result in sources[0].Document.Objects if sources else []:
         if isinstance(getattr(result, "Proxy", None), NativeSolid) and result.Source in sources:
             try:
-                result.Proxy.execute(result)
+                result.Proxy.execute(result, background=False)
             except Exception as error:
                 errors.append(result.Name + ": " + str(error))
     if errors:

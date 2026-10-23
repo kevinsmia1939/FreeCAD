@@ -51,7 +51,7 @@ def main():
         item.BackgroundRecompute = True
     doc.recompute()
     doc.commitTransaction()
-    mixed, raw, solid, start = native.mixed_box, native._mixed_box, native.build_mixed_solids, native.start_boundary_job
+    mixed, raw, solid, start = native.mixed_box, native._mixed_box, native.build_mixed_solids, native.start_boundary_job_from_record
     calls = []
     def forbidden(*_args, **_kwargs):
         raise AssertionError("GUI pipeline invoked synchronous source/solid construction")
@@ -60,7 +60,7 @@ def main():
         calls.append(args[2:])
         return job
     native.mixed_box = native._mixed_box = native.build_mixed_solids = forbidden
-    native.start_boundary_job = observed
+    native.start_boundary_job_from_record = observed
     try:
         doc.openTransaction("Complement source in background")
         source.Operation = "BoxMinusField"
@@ -200,7 +200,7 @@ def main():
         assert request.identity not in ImplicitMixedRecompute.scheduler().requests
         until(lambda: native.native_job_status(request.job)["state"] == "cancelled", 10)
     finally:
-        native.mixed_box, native._mixed_box, native.build_mixed_solids, native.start_boundary_job = mixed, raw, solid, start
+        native.mixed_box, native._mixed_box, native.build_mixed_solids, native.start_boundary_job_from_record = mixed, raw, solid, start
         if "MixedRecomputeGUI" in App.listDocuments():
             App.closeDocument("MixedRecomputeGUI")
     print("native implicit source recompute GUI smoke test passed", flush=True)
