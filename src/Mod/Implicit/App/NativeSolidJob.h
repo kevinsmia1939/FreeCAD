@@ -12,6 +12,12 @@
 
 namespace Implicit
 {
+struct NativeBoundaryRequest
+{
+    std::string field, box;
+    bool common = true, regularized = false;
+    int cells = 512;
+};
 struct NativeSurfaceRequest
 {
     bool checked = false;
@@ -27,6 +33,7 @@ struct NativeSolidRequest
     std::size_t cells = 4000000, tests = 2000000, separators = 2000000;
     std::size_t geometryCells = 2000000, segments = 8000000;
     std::optional<NativeSurfaceRequest> display;
+    std::optional<NativeBoundaryRequest> tracing;
 };
 
 struct NativeSolidResult
@@ -37,6 +44,7 @@ struct NativeSolidResult
     std::string surfaceError;
     std::unique_ptr<BRepClass3d_ImplicitBox::Boundary> surfaceSource;
     std::optional<CheckedDisplay> checks;
+    std::unique_ptr<BRepClass3d_ImplicitBox::Boundary> preparedBoundary;
 };
 
 class NativeSolidJob: public BRepClass3d_ImplicitWork::Control
@@ -59,10 +67,12 @@ public:
     std::unique_ptr<NativeSolidResult> take();
     void run();
     bool isSurfaceJob() const { return surfaceJob; }
+    bool isBoundaryJob() const { return boundaryJob; }
 
 private:
     NativeSolidRequest request;
     const bool surfaceJob;
+    const bool boundaryJob;
     std::atomic_bool cancelled {false};
     mutable std::atomic_size_t checkpoints {0};
     std::atomic<BRepClass3d_ImplicitWork::Phase> phase {BRepClass3d_ImplicitWork::Phase::Copying};

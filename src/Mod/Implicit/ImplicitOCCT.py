@@ -36,6 +36,7 @@ from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, i
                           dumps_mixed_solids, loads_mixed_solids,
                           source_mixed_solids as _source_mixed_solids)
 from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed, inspect_mixed as _inspect_mixed
+from _ImplicitOCCT import start_boundary_job as _start_boundary_job, take_boundary_job as _take_boundary_job
 from _ImplicitOCCT import trace_gyroid_plane as _trace_gyroid_plane
 
 
@@ -49,6 +50,19 @@ def trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,
     """
     return _trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,
                                distance_tolerance, maximum_cells, allow_exact_lattice_nodes)
+
+
+def start_boundary_job(field, box, operation="common", tolerance=.1, maximum_cells=512,
+                       corner_policy="reject"):
+    """Private source preparation; no document/Part objects enter the worker."""
+    if not isinstance(box, Part.Shape):
+        raise TypeError("box must be a conventional Part.Shape")
+    return _start_boundary_job(field, box.exportBrepToString(), operation, tolerance,
+                               maximum_cells, corner_policy)
+
+
+def take_boundary_job(job):
+    return _decode_caps(_take_boundary_job(job))
 
 
 def mixed_box(field, box, operation="common", tolerance=.1, maximum_cells=512,

@@ -1750,10 +1750,22 @@ SolidJobPtr readSolidJob(PyObject* args)
     PyObject* object;
     if (!PyArg_ParseTuple(args, "O", &object)) { return {}; }
     if (!PyCapsule_IsValid(object, solidJobName)) {
-        PyErr_SetString(PyExc_TypeError, "expected a native solid job handle");
+        PyErr_SetString(PyExc_TypeError, "expected a native geometry job handle");
         return {};
     }
     return *static_cast<SolidJobPtr*>(PyCapsule_GetPointer(object, solidJobName));
+}
+
+PyObject* ownNativeJob(Implicit::NativeSolidRequest request)
+{
+    auto job = std::make_unique<SolidJobPtr>(Implicit::submitNativeSolid(std::move(request)));
+    PyObject* capsule = PyCapsule_New(job.get(), solidJobName, destroySolidJob);
+    if (!capsule) {
+        (*job)->cancel();
+        return nullptr;
+    }
+    job.release();
+    return capsule;
 }
 
 PyObject* submitNativeJob(PyObject* object, Implicit::NativeSolidRequest request)
@@ -1767,14 +1779,41 @@ PyObject* submitNativeJob(PyObject* object, Implicit::NativeSolidRequest request
     std::ostringstream output;
     BRepClass3d_ImplicitBoxIO::Write(*source, output);
     request.boundary = output.str();
-    auto job = std::make_unique<SolidJobPtr>(Implicit::submitNativeSolid(std::move(request)));
-    PyObject* capsule = PyCapsule_New(job.get(), solidJobName, destroySolidJob);
-    if (!capsule) {
-        (*job)->cancel();
-        return nullptr;
+    return ownNativeJob(std::move(request));
+}
+
+PyObject* startBoundaryJob(PyObject* args)
+{
+    PyObject *object, *record;
+    const char *operation = "common", *policy = "reject";
+    Implicit::NativeSolidRequest request;
+    Implicit::NativeBoundaryRequest tracing;
+    if (!PyArg_ParseTuple(args, "OU|sdis", &object, &record, &operation,
+                         &request.tolerance, &tracing.cells, &policy)) { return nullptr; }
+    const auto* field = getFace(object);
+    if (!field) { return nullptr; }
+    const std::string name(operation), corner(policy);
+    if ((name != "common" && name != "box_minus_field")
+        || (corner != "reject" && corner != "regularized")
+        || !std::isfinite(request.tolerance) || request.tolerance <= 0
+        || tracing.cells < 4 || tracing.cells > 512 || (tracing.cells & (tracing.cells - 1))) {
+        throw Standard_DomainError("Invalid native boundary job settings");
     }
-    job.release();
-    return capsule;
+    Py_ssize_t size;
+    const char* text = PyUnicode_AsUTF8AndSize(record, &size);
+    if (!text) { return nullptr; }
+    if (size > 4 * 1024 * 1024) {
+        throw Standard_DomainError("Conventional box snapshot exceeds 4 MiB");
+    }
+    std::ostringstream output;
+    BRep_ImplicitIO::Write(*field, output);
+    tracing.field = output.str();
+    if (tracing.field.size() > 65536) { throw Standard_DomainError("Native field snapshot exceeds 64 KiB"); }
+    tracing.box.assign(text, size_t(size));
+    tracing.common = name == "common";
+    tracing.regularized = corner == "regularized";
+    request.tracing = std::move(tracing);
+    return ownNativeJob(std::move(request));
 }
 
 PyObject* startSurfaceJob(PyObject* args)
@@ -1863,7 +1902,7 @@ PyObject* takeSolidJob(PyObject* args)
 {
     const auto job = readSolidJob(args);
     if (!job) { return nullptr; }
-    if (job->isSurfaceJob()) {
+    if (job->isSurfaceJob() || job->isBoundaryJob()) {
         PyErr_SetString(PyExc_TypeError, "expected a solid-construction job");
         return nullptr;
     }
@@ -1924,6 +1963,28 @@ PyObject* takeSurfaceJob(PyObject* args)
         || !set(result.get(), "input_settings", settings.release())
         || !set(result.get(), "input_record", PyUnicode_FromStringAndSize(
             input.boundary.data(), Py_ssize_t(input.boundary.size())))) { return nullptr; }
+    return result.release();
+}
+
+PyObject* takeBoundaryJob(PyObject* args)
+{
+    const auto job = readSolidJob(args);
+    if (!job) { return nullptr; }
+    if (!job->isBoundaryJob()) {
+        PyErr_SetString(PyExc_TypeError, "expected a boundary preparation job");
+        return nullptr;
+    }
+    auto data = job->take();
+    const auto& tracing = *data->request.tracing;
+    Object result(boundaryResult(*data->preparedBoundary));
+    Object settings(Py_BuildValue("(sdis)", tracing.common ? "common" : "box_minus_field",
+        data->request.tolerance, tracing.cells, tracing.regularized ? "regularized" : "reject"));
+    if (!result || !settings
+        || !set(result.get(), "input_settings", settings.release())
+        || !set(result.get(), "input_field", PyUnicode_FromStringAndSize(tracing.field.data(), Py_ssize_t(tracing.field.size())))
+        || !set(result.get(), "input_box", PyUnicode_FromStringAndSize(tracing.box.data(), Py_ssize_t(tracing.box.size())))) {
+        return nullptr;
+    }
     return result.release();
 }
 
@@ -2492,15 +2553,19 @@ PyMethodDef methods[] = {
      "solids. Explicitly rebuild/recheck using this source; source flags are not proof."},
     {"start_solid_job", checked<startSolidJob>, METH_VARARGS,
      "Start a bounded native solid/initial-display job from a private boundary snapshot."},
+    {"start_boundary_job", checked<startBoundaryJob>, METH_VARARGS,
+     "Prepare a mixed boundary on the shared worker from private field/box snapshots."},
+    {"take_boundary_job", checked<takeBoundaryJob>, METH_VARARGS,
+     "Consume prepared boundary plus exact input_field/input_box/input_settings descriptors."},
     {"start_surface_job", checked<startSurfaceJob>, METH_VARARGS,
      "start_surface_job(boundary, tolerance=.1, cells=256, nodes=200000, triangles=400000, "
      "checked=False, depth=14, spatial=2000000, patches=1000000, pairs=2000000, broad=50000000)"},
     {"take_surface_job", checked<takeSurfaceJob>, METH_VARARGS,
      "Consume a display job once: surface, input_record and input_settings."},
     {"native_job_status", checked<solidJobStatus>, METH_VARARGS,
-     "Read native solid/display work state, phase and checkpoint count."},
+     "Read native boundary/solid/display work state, phase and checkpoint count."},
     {"cancel_native_job", checked<cancelSolidJob>, METH_VARARGS,
-     "Request cooperative cancellation of a native solid/display job."},
+     "Request cooperative cancellation of a native boundary/solid/display job."},
     {"solid_job_status", checked<solidJobStatus>, METH_VARARGS,
      "Read native work state, phase and checkpoint count without waiting."},
     {"cancel_solid_job", checked<cancelSolidJob>, METH_VARARGS,
