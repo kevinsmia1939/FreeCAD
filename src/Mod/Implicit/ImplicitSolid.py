@@ -134,6 +134,16 @@ class NativeSolid:
                 and getattr(self, "_recompute_request", None) is None):
             obj.BackendStatus = "Pending native solid background preview"
             return
+        if (obj.Source is not None and getattr(getattr(obj.Source, "Proxy", None),
+                                              "_recompute_request", None) is not None):
+            if getattr(self, "_recompute_request", None) is not None:
+                from ImplicitSolidRecompute import scheduler
+                scheduler().cancel(obj)
+            obj.Geometry = None
+            obj.InputFingerprint = ""
+            self._refresh(obj)
+            obj.BackendStatus = "Pending native boundary preparation"
+            return
         try:
             if (getattr(self, "_recompute_request", None) is not None
                     and not obj.BackgroundRecompute):

@@ -34,10 +34,15 @@ class MixedBoundary:
         self._restore_failed = False
         self._restoring = False
         self._publishing = False
+        self._pending_job = self._recompute_request = None
         obj.Proxy = self
 
     @staticmethod
     def _ensure_geometry(obj):
+        if "BackgroundRecompute" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyBool", "BackgroundRecompute", "Native mixed boundary",
+                            "Queue GUI source tracing; geometry is unavailable until completion")
+            obj.BackgroundRecompute = False
         if "CornerPolicy" not in obj.PropertiesList:
             obj.addProperty("App::PropertyEnumeration", "CornerPolicy", "Native mixed boundary")
             obj.CornerPolicy = ["Reject", "Regularized"]
@@ -123,6 +128,39 @@ class MixedBoundary:
             raise RuntimeError("No successful native mixed-boundary recompute")
         return native.classify_mixed(self._boundary["boundary_handle"], tuple(point), distance_tolerance)
 
+    @staticmethod
+    def _validate_operands(obj):
+        field, box = obj.Field, obj.Box
+        if (field is None or field.TypeId != "Implicit::Feature"
+                or not field.isValid() or str(field.Operation) != "Definition"
+                or str(field.Function) != "Gyroid" or field.FieldGraph
+                or not field.InsideNegative or field.getGlobalPlacement() != App.Placement()):
+            raise ValueError("Field must be a valid identity-placed primitive gyroid with F<=0 inside")
+        if (box is None or not box.isValid() or not box.isDerivedFrom("Part::Feature")
+                or box.getGlobalPlacement() != box.Placement):
+            raise ValueError("Box must link a valid conventional Part solid")
+        return field, box
+
+    def publish(self, obj, completed, fingerprint, field_record, box_record, settings):
+        """Publish only a fresh boundary matching the captured live recipe."""
+        self._validate_operands(obj)
+        if (self._restore_failed or self._fingerprint(obj) != fingerprint
+                or completed["input_field"] != field_record
+                or completed["input_box"] != box_record
+                or completed["input_settings"] != settings
+                or not completed["seam_bound_verified"]):
+            raise ValueError("Background boundary disagrees with its live source/settings")
+        data = {key: value for key, value in completed.items()
+                if key not in ("input_field", "input_box", "input_settings")}
+        self._publishing = True
+        try:
+            obj.Geometry = data["boundary_handle"]
+            obj.InputFingerprint = fingerprint
+        finally:
+            self._publishing = False
+        self._display(obj, data)
+        obj.NativeRevision += 1
+
     def execute(self, obj):
         self._boundary = self._mesh = self._section = None
         obj.SeamCount = obj.PlanarCapCount = 0
@@ -141,15 +179,11 @@ class MixedBoundary:
                 raise ValueError("Unsupported native mixed-boundary schema")
             self._ensure_geometry(obj)
             obj.MixedSchema = 2
-            field, box = obj.Field, obj.Box
-            if (field is None or field.TypeId != "Implicit::Feature"
-                    or not field.isValid() or str(field.Operation) != "Definition"
-                    or str(field.Function) != "Gyroid" or field.FieldGraph
-                    or not field.InsideNegative or field.getGlobalPlacement() != App.Placement()):
-                raise ValueError("Field must be a valid identity-placed primitive gyroid with F<=0 inside")
-            if (box is None or not box.isValid() or not box.isDerivedFrom("Part::Feature")
-                    or box.getGlobalPlacement() != box.Placement):
-                raise ValueError("Box must link a valid conventional Part solid")
+            if (getattr(self, "_recompute_request", None) is not None
+                    and not obj.BackgroundRecompute):
+                from ImplicitMixedRecompute import scheduler
+                scheduler().cancel(obj)
+            field, box = self._validate_operands(obj)
             fingerprint = self._fingerprint(obj)
             if obj.Geometry is not None and obj.InputFingerprint == fingerprint:
                 data = native.inspect_mixed(obj.Geometry)
@@ -166,6 +200,10 @@ class MixedBoundary:
                     self._restore_failed = True
                     raise ValueError("Stored native geometry disagrees with unchanged inputs; explicit rebuild required")
             else:
+                if App.GuiUp and obj.BackgroundRecompute:
+                    from ImplicitMixedRecompute import scheduler
+                    scheduler().submit(obj, fingerprint)
+                    return
                 face = native.gyroid(field.Period, field.IsoValue, tuple(field.DomainMin),
                                      tuple(field.DomainMax), obj.GeometricTolerance.Value)
                 mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
@@ -182,6 +220,9 @@ class MixedBoundary:
             # implicit face is NEVER passed to tessellate/BRepMesh or Part.Shape.
             self._display(obj, data)
         except Exception as error:
+            if App.GuiUp and getattr(self, "_recompute_request", None) is not None:
+                from ImplicitMixedRecompute import scheduler
+                scheduler().cancel(obj)
             self._boundary = self._mesh = self._section = None
             obj.SeamCount = obj.PlanarCapCount = 0
             obj.BoxEdgeRootCount = 0
@@ -196,6 +237,9 @@ class MixedBoundary:
                     obj.InputFingerprint = ""
             finally:
                 self._publishing = False
+            if App.GuiUp and getattr(obj, "BackgroundRecompute", False):
+                from ImplicitMixedRecompute import Scheduler
+                Scheduler.invalidate_consumers(obj, "Source boundary unavailable: " + str(error))
             raise
         finally:
             obj.NativeRevision += 1
@@ -247,6 +291,7 @@ class MixedBoundary:
         self._restoring = True
         self._publishing = False
         self._restore_failed = False
+        self._pending_job = self._recompute_request = None
 
 
 from ImplicitNative import NativeBoundaryView

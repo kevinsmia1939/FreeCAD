@@ -11,6 +11,8 @@ import ImplicitOCCT as native
 
 def main():
     obj = ImplicitMixed.demo()
+    assert not App.GuiUp
+    obj.BackgroundRecompute = True  # Persisted opt-in keeps headless execution synchronous.
     doc = obj.Document
     assert obj.isValid(), obj.BackendStatus
     assert "Shape" not in obj.PropertiesList
