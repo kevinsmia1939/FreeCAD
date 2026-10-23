@@ -75,6 +75,7 @@ def main():
     box.Placement.Base = (-20, -20, 20)
     doc.recompute()
     source = ImplicitMixed.create(field, box, corner_policy="Regularized")
+    assert not source.BackgroundRecompute
     field.ViewObject.Visibility = box.ViewObject.Visibility = False
     count = len(doc.Objects)
     source_record = native.dumps_mixed(source.Geometry)
@@ -194,6 +195,7 @@ def main():
     obj = task.result
     assert task.closed and not Gui.Control.activeDialog()
     assert obj is not None and obj.SolidValidated and obj.Geometry is not None
+    assert obj.BackgroundRecompute and not source.BackgroundRecompute
     assert obj.MaximumGeometryDepth == 18 and obj.MaximumDepth == 16
     assert obj.MaximumGeometryCells == 2000000 and obj.GeometricTolerance.Value == .1
     assert native.inspect_mixed_solids(obj.Geometry)["geometry"]["boundary_bound"] <= .1

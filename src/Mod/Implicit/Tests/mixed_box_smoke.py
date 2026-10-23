@@ -12,6 +12,7 @@ import ImplicitOCCT as native
 def main():
     obj = ImplicitMixed.demo()
     assert not App.GuiUp
+    assert not obj.BackgroundRecompute
     obj.BackgroundRecompute = True  # Persisted opt-in keeps headless execution synchronous.
     doc = obj.Document
     assert obj.isValid(), obj.BackendStatus

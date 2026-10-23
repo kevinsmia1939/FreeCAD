@@ -896,7 +896,7 @@ def create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=
 
 
 def _create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth=-1,
-            *, build_limits=None, hide_source=False, completed=None):
+            *, build_limits=None, hide_source=False, completed=None, background_recompute=False):
     import ImplicitOCCT  # ABI guard before document mutation.
     if App.getActiveTransaction():
         raise RuntimeError("Finish the active transaction before creating a native solid")
@@ -919,6 +919,7 @@ def _create(source, tolerance=.1, topology_resolution=32, maximum_geometry_depth
     try:
         obj = document.addObject("Implicit::NativeSolidFeaturePython", "NativeSolid")
         NativeSolid(obj)
+        obj.BackgroundRecompute = bool(background_recompute)
         obj.Source = source
         obj.GeometricTolerance = tolerance
         obj.TopologyResolution = topology_resolution

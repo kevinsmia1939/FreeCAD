@@ -58,6 +58,7 @@ def main():
     doc.abortTransaction()
     obj = ImplicitSolid.create(boundary)
     assert not App.GuiUp
+    assert not obj.BackgroundRecompute
     obj.BackgroundRecompute = True  # Headless recompute retains synchronous semantics.
     check(obj)
     assert obj.TypeId == "Implicit::NativeSolidFeaturePython" and "Shape" not in obj.PropertiesList

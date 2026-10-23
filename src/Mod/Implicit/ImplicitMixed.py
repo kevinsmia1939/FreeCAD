@@ -855,12 +855,28 @@ class MixedBoundaryTaskPanel:
 
 
 def create(field, box, operation="Common", corner_policy="Reject"):
+    return _create(field, box, operation, corner_policy)
+
+
+def _create(field, box, operation="Common", corner_policy="Reject", *, completed=None,
+            tolerance=.1, cells=512, background_recompute=False, hide_operands=False,
+            submitted_snapshot=None):
     import ImplicitOCCT  # noqa: F401; ABI guard before document mutation.
     policy = {"reject": "Reject", "regularized": "Regularized"}.get(str(corner_policy).lower())
     if policy is None:
         raise ValueError("Unknown native corner policy")
     if field.Document != box.Document:
         raise ValueError("Mixed operands must belong to the same document")
+    if completed is not None and App.getActiveTransaction():
+        raise RuntimeError("Finish the active transaction before creating a mixed boundary")
+    snapshot = None
+    if completed is not None:
+        from ImplicitMixedCreate import capture
+        snapshot = capture(field, box, operation, tolerance, cells, policy)
+        if submitted_snapshot is not None:
+            if any(snapshot[index] != submitted_snapshot[index] for index in (0, 1, 3)):
+                raise ValueError("Boundary operands changed before publication")
+            snapshot = submitted_snapshot
     document = field.Document
     document.openTransaction("Create native mixed boundary")
     try:
@@ -868,12 +884,19 @@ def create(field, box, operation="Common", corner_policy="Reject"):
         MixedBoundary(obj)
         obj.Field, obj.Box, obj.Operation = field, box, operation
         obj.CornerPolicy = policy
+        obj.GeometricTolerance, obj.MaximumCells = tolerance, cells
+        obj.BackgroundRecompute = bool(background_recompute)
         obj.Label = "Native " + operation + " (experimental caps/seams)"
         if App.GuiUp:
             MixedBoundaryView(obj.ViewObject)
+        if completed is not None:
+            fingerprint, face_record, box_record, settings = snapshot
+            obj.Proxy.publish(obj, completed, fingerprint, face_record, box_record, settings)
         document.recompute()
         if not obj.isValid() or obj.Proxy._boundary is None:
             raise RuntimeError(obj.BackendStatus)
+        if App.GuiUp and hide_operands:
+            field.ViewObject.Visibility = box.ViewObject.Visibility = False
         document.commitTransaction()
         return obj
     except BaseException:
@@ -888,7 +911,8 @@ def selected(operation="Common"):
     boxes = [o for o in objects if o.isDerivedFrom("Part::Feature")]
     if len(objects) != 2 or len(fields) != 1 or len(boxes) != 1:
         raise ValueError("Select one primitive native gyroid and one conventional Part box")
-    return create(fields[0], boxes[0], operation)
+    from ImplicitMixedCreate import open_task
+    return open_task(fields[0], boxes[0], operation)
 
 
 def demo(operation="Common", open_contours=False):

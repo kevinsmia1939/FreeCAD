@@ -141,7 +141,8 @@ class NativeSolidCreationTaskPanel:
             limits = dict(limits)
             depth = limits.pop("MaximumGeometryDepth")
             self.result = _create(self.source, tolerance, resolution, depth,
-                                  build_limits=limits, hide_source=hide, completed=completed)
+                                  build_limits=limits, hide_source=hide, completed=completed,
+                                  background_recompute=True)
         except Exception as error:
             self._stop()
             self.timer.stop()
