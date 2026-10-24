@@ -14,6 +14,7 @@
 #include <BRepClass3d_ImplicitSolidIO.hxx>
 #include <BRepMesh_ImplicitBoundary.hxx>
 #include <BRep_TImplicitFace.hxx>
+#include <BRep_TImplicitCylinderPatch.hxx>
 #include <BRepTools.hxx>
 #include <Geom_ImplicitSphere.hxx>
 #include <Geom_ImplicitGyroid.hxx>
@@ -228,6 +229,30 @@ PyObject* query(PyObject* args)
     return PyBool_FromLong(BRep_ImplicitTool::IsInDomain(*face, p));
 }
 
+PyObject* restrictCylinderLocal(PyObject* args)
+{
+    PyObject *object, *origin, *axis, *direction;
+    double radius, minimum, maximum;
+    gp_Pnt p, n, x;
+    if (!PyArg_ParseTuple(args, "OOOOd(dd)", &object, &origin, &axis, &direction,
+        &radius, &minimum, &maximum)
+        || !point(origin, p) || !point(axis, n) || !point(direction, x)) {
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    gp_Ax2 frame;
+    try {
+        frame = gp_Ax2(p, gp_Dir(gp_Vec(n.XYZ())), gp_Dir(gp_Vec(x.XYZ())));
+    }
+    catch (const Standard_ConstructionError&) {
+        throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
+    }
+    return ownFace(BRep_TImplicitCylinderPatch::Restrict(*face, frame, radius, minimum, maximum));
+}
+
 PyObject* info(PyObject* args)
 {
     PyObject* object;
@@ -241,11 +266,13 @@ PyObject* info(PyObject* args)
     double x0, y0, z0, x1, y1, z1;
     BRep_ImplicitTool::Bounds(*face).Get(x0, y0, z0, x1, y1, z1);
     return Py_BuildValue(
-        "{s:O,s:O,s:O,s:d,s:(ddd),s:(ddd)}",
+        "{s:O,s:O,s:O,s:O,s:d,s:(ddd),s:(ddd)}",
         "is_implicit",
         BRep_Tool::IsImplicit(*face) ? Py_True : Py_False,
         "has_parametric_surface",
         BRep_Tool::HasParametricSurface(*face) ? Py_True : Py_False,
+        "cylinder_restricted",
+        dynamic_cast<const BRep_TImplicitCylinderPatch*>(face->TShape().get()) ? Py_True : Py_False,
         "solid_validated",
         Py_False,
         "tolerance",
@@ -2858,6 +2885,8 @@ PyMethodDef methods[] = {
      "mixed_box(gyroid, box_brep, operation, tolerance=.1, maximum_cells=512) -> hybrid boundary, "
      "NOT a solid"},
     {"sphere", checked<sphere>, METH_VARARGS, "sphere(center, radius, tolerance=0.1) -> native face"},
+    {"restrict_cylinder_local", checked<restrictCylinderLocal>, METH_VARARGS,
+     "Restrict an owned primitive face to a finite field-local cylinder; no trim topology/solid proof."},
     {"gyroid",
      checked<gyroid>,
      METH_VARARGS,

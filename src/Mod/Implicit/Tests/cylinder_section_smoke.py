@@ -5,6 +5,23 @@ import ImplicitOCCT as native
 
 face = native.gyroid(10, .21, (-10, -10, -10), (10, 10, 10))
 record = native.dumps(face)
+restricted = native.restrict_cylinder_local(face, (0, 0, 0), (0, 0, 1), (1, 0, 0), 2, (-1, 1))
+assert native.info(restricted)["cylinder_restricted"]
+assert not native.info(face)["cylinder_restricted"]
+assert not native.info(restricted)["solid_validated"]
+assert not native.info(restricted)["has_parametric_surface"]
+assert native.in_domain(restricted, (2, 0, 0))
+assert not native.in_domain(restricted, (1.5, 1.5, 0))
+assert not native.in_domain(restricted, (0, 0, 1.01))
+restriction_record = native.dumps(restricted)
+assert restriction_record.startswith("OCCT_IMPLICIT_FACE 3\n")
+restored_restriction = native.loads(restriction_record)
+assert native.dumps(restored_restriction) == restriction_record
+assert not native.in_domain(restored_restriction, (1.5, 1.5, 0))
+moved_restriction = native.translated(restricted, (3, -4, 2))
+assert native.in_domain(moved_restriction, (3.4, -3.7, 2.2))
+assert not native.in_domain(moved_restriction, (4.5, -2.5, 2))
+assert native.dumps(face) == record
 args = ((0, 0, 0), (0, 0, 1), (1, 0, 0), 2, (.27, 1.1), (-4.2, 3.7))
 result = native.trace_gyroid_cylinder(face, *args)
 assert result["resolved"] and result["curves"]

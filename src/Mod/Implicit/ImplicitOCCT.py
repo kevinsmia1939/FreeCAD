@@ -2,8 +2,9 @@
 """Experimental in-process native faces. Never import the private extension directly.
 
 Opaque immutable snapshots are NOT Part shapes or solids. Primitive records use
-explicit OCCT schema-1 I/O; trimmed/topological records reject rather than lose
-geometry. Query residuals have field units, ray brackets/model tolerances mm.
+explicit versioned OCCT I/O, including box-exclusion and cylinder query masks;
+unsupported trim topology rejects rather than losing geometry. Query residuals
+have field units, ray brackets/model tolerances mm.
 """
 from pathlib import Path
 from importlib.util import find_spec
@@ -42,6 +43,17 @@ from _ImplicitOCCT import trace_gyroid_cylinder as _trace_gyroid_cylinder
 from _ImplicitOCCT import trace_gyroid_cylinder_periodic as _trace_gyroid_cylinder_periodic
 from _ImplicitOCCT import trace_gyroid_cylinder_boundary as _trace_gyroid_cylinder_boundary
 from _ImplicitOCCT import build_gyroid_cylinder_rings as _build_gyroid_cylinder_rings
+from _ImplicitOCCT import restrict_cylinder_local as _restrict_cylinder_local
+
+
+def restrict_cylinder_local(face, origin, axis, x_direction, radius, height_bounds):
+    """Native field-domain mask in field-local coordinates; no cap/trim/solid proof.
+
+    Source geometry/instance placement is retained. The conservative cylinder
+    enclosure must fit inside the computational box. Existing restrictions and
+    child topology reject; schema-3 records preserve the new cylinder predicate.
+    """
+    return _restrict_cylinder_local(face, origin, axis, x_direction, radius, height_bounds)
 
 
 def build_gyroid_cylinder_rings(face, origin, axis, x_direction, radius, angle_bounds,
