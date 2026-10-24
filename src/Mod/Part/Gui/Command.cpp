@@ -26,6 +26,7 @@
 #include <QFileInfo>
 #include <QPointer>
 #include <QString>
+#include <cstring>
 #include <Standard_Version.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS_Shape.hxx>
@@ -73,6 +74,32 @@
 #include "TaskShapeBuilder.h"
 #include "TaskSweep.h"
 #include "ViewProvider.h"
+
+namespace
+{
+// Implicit is optional. Recognize its representations without linking PartGui
+// to the experimental kernel, before any generic Part shape/BOP access.
+bool dispatchNativeBoolean(const std::vector<Gui::SelectionObject>& selection, const char* operation)
+{
+    for (const auto& item : selection) {
+        const auto* obj = item.getObject();
+        const auto* linked = obj ? obj->getLinkedObject(true) : nullptr;
+        if (!linked) {
+            continue;
+        }
+        const auto* geometry = linked->getPropertyByName("Geometry");
+        const auto propertyType = geometry ? geometry->getTypeId().getName() : std::string_view {};
+        if (linked->getTypeId().getName().starts_with("Implicit::")
+            || propertyType == "Implicit::PropertyNativeGeometry"
+            || propertyType == "Implicit::PropertyNativeSolidGeometry") {
+            Gui::Command::doCommand(Gui::Command::Gui,
+                "import ImplicitPartBoolean\nImplicitPartBoolean.dispatch('%s')", operation);
+            return true;
+        }
+    }
+    return false;
+}
+}
 
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -331,6 +358,9 @@ void CmdPartCut::activated(int iMsg)
         App::DocumentObject::getClassTypeId(),
         Gui::ResolveMode::FollowLink
     );
+    if (dispatchNativeBoolean(Sel, "Cut")) {
+        return;
+    }
     if (Sel.size() != 2) {
         QMessageBox::warning(
             Gui::getMainWindow(),
@@ -407,6 +437,9 @@ void CmdPartCommon::activated(int iMsg)
         App::DocumentObject::getClassTypeId(),
         Gui::ResolveMode::FollowLink
     );
+    if (dispatchNativeBoolean(Sel, "Common")) {
+        return;
+    }
 
     if (Sel.empty()) {
         QMessageBox::warning(
@@ -484,6 +517,9 @@ void CmdPartFuse::activated(int iMsg)
         App::DocumentObject::getClassTypeId(),
         Gui::ResolveMode::FollowLink
     );
+    if (dispatchNativeBoolean(Sel, "Fuse")) {
+        return;
+    }
 
     // test if selected object is a compound, and if it is, look how many children it has...
     std::size_t numShapes = 0;
