@@ -86,7 +86,7 @@ public:
             "snapNative",
             &Module::snapNative,
             "snapNative(selectedNativeGeometry, mode, cursor, coordinateTolerance=.1) -> points "
-            "on stored vertex/edge topology; not implicit-face projection"
+            "on stored topology; Near faces use restricted local projection, not global nearest search"
         );
         add_varargs_method(
             "nativeGeometry",

@@ -63,7 +63,7 @@ def main():
         assert straight and curved
         for name in ("NativeFace1", "Cap1"):
             selected = obj.getSubObject(name)
-            assert all(query(selected, mode) == [] for mode in ("Endpoint", "Midpoint", "Near"))
+            assert all(query(selected, mode) == [] for mode in ("Endpoint", "Midpoint"))
         rejects(lambda: Implicit.snapNative(geometry, "Endpoint", (0, 0, 0)))
         rejects(lambda: Implicit.snapNative(vertex, "Center", (0, 0, 0)))
         for tolerance in (0, -1, math.inf, math.nan):

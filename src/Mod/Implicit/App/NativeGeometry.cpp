@@ -14,6 +14,9 @@
 #include <BRepClass3d_ImplicitSolidIO.hxx>
 #include <BRep_TImplicitFace.hxx>
 #include <BRep_Tool.hxx>
+#include <BRep_ImplicitTool.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -442,7 +445,8 @@ std::vector<Base::Vector3d> NativeElementGeometry::snapPoints(
         throw Base::ValueError("Native snapping requires finite coordinates and positive coordinate tolerance");
     }
     const auto& shape = checkedSegment(element.get(), boundary).shape;
-    if (shape.ShapeType() != TopAbs_VERTEX && shape.ShapeType() != TopAbs_EDGE) {
+    const bool faceNear = near && shape.ShapeType() == TopAbs_FACE;
+    if (shape.ShapeType() != TopAbs_VERTEX && shape.ShapeType() != TopAbs_EDGE && !faceNear) {
         return {}; // No mesh triangle, untrimmed surface or whole-region fallback.
     }
     // These are picks on stored topology, not a new implicit-surface accuracy
@@ -463,10 +467,60 @@ std::vector<Base::Vector3d> NativeElementGeometry::snapPoints(
             magnitude += std::abs(static_cast<long double>(placement[row][column])) * extent[column];
         }
     }
-    if (512 * std::numeric_limits<double>::epsilon() * magnitude >= coordinateTolerance) {
+    if (512 * std::numeric_limits<double>::epsilon() * magnitude
+        >= coordinateTolerance / (faceNear ? 8 : 1)) {
         throw Base::ValueError("Native snap coordinate precision is exhausted");
     }
     std::vector<Base::Vector3d> result;
+    if (faceNear) {
+        auto inverse = placement;
+        inverse.inverse();
+        auto local = cursor;
+        placePoint(inverse, local);
+        const auto face = TopoDS::Face(shape);
+        if (BRep_Tool::IsImplicit(face)) {
+            const auto foot = BRep_ImplicitTool::Project(face, gp_Pnt(local.x, local.y, local.z),
+                                                        coordinateTolerance / 16, coordinateTolerance * 4);
+            if (foot.Converged) {
+                result.emplace_back(foot.Point.X(), foot.Point.Y(), foot.Point.Z());
+            }
+        }
+        else {
+            const BRepAdaptor_Surface surface(face);
+            if (surface.GetType() != GeomAbs_Plane) {
+                return {};
+            }
+            const auto plane = surface.Plane();
+            const gp_Pnt seed(local.x, local.y, local.z);
+            const gp_Vec normal(plane.Axis().Direction());
+            const auto foot = seed.Translated(normal * -gp_Vec(plane.Location(), seed).Dot(normal));
+            const BRepClass_FaceClassifier classifier(face, foot, std::min(1.e-7, coordinateTolerance / 4096));
+            if (classifier.State() == TopAbs_IN || classifier.State() == TopAbs_ON) {
+                result.emplace_back(foot.X(), foot.Y(), foot.Z());
+            }
+            else {
+                // The unconstrained plane foot is outside the stored cap (or
+                // in a hole). Its closest admissible point is on a trim edge.
+                std::vector<Base::Vector3d> points;
+                std::vector<Line> lines;
+                boundaryLines(shape, points, lines);
+                double best = std::numeric_limits<double>::infinity();
+                Base::Vector3d candidate;
+                for (const auto& line : lines) {
+                    const auto& a = points[line.I1];
+                    const auto delta = points[line.I2] - a;
+                    if (delta.Sqr() <= 0) continue;
+                    const double parameter = std::clamp((local - a).Dot(delta) / delta.Sqr(), 0., 1.);
+                    const auto projected = a + delta * parameter;
+                    const double distance = (local - projected).Sqr();
+                    if (distance < best) { best = distance; candidate = projected; }
+                }
+                if (std::isfinite(best)) result.push_back(candidate);
+            }
+        }
+        for (auto& point : result) placePoint(placement, point);
+        return result;
+    }
     if (endpoint) {
         const auto append = [&](const TopoDS_Vertex& vertex) {
             const auto p = BRep_Tool::Pnt(vertex);

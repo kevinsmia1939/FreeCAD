@@ -86,9 +86,9 @@ def main():
             (edge_info["x"], edge_info["y"], edge_info["z"]))[0])
         assert (near - expected_near).Length < 1e-10
         assert snapper.cursorMode == "passive"
-        # Unsupported surface/center snapping stays empty. No display-triangle
+        # Face endpoint/midpoint/center modes stay empty. No display-triangle
         # endpoint or UV-based working-plane alignment is fabricated.
-        snapper.active_snaps = ["Lock", "Endpoint", "Midpoint", "Near", "Center"]
+        snapper.active_snaps = ["Lock", "Endpoint", "Midpoint", "Center"]
         assert snapper.snapToNative(solid, "NativeFace1", App.Vector()) == []
         empty = doc.addObject("Implicit::NativeFeature", "Unavailable")
         assert snapper.snapToNative(empty, "Vertex1", App.Vector()) == []

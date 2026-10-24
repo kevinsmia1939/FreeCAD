@@ -778,7 +778,7 @@ class Snapper:
     def snapToNative(self, parent, subname, point):
         """Snap to stored native topology, with the selected path placement once.
 
-        The native query supports vertices and finite edges. Unsupported faces,
+        The native query supports vertices, finite edges and local face feet. Unsupported modes,
         stale references, unavailable builds and unqualified transforms yield no
         candidate; display triangles and generic Part shape conversion are not
         used. Importing Draft alone does not require the experimental module.
