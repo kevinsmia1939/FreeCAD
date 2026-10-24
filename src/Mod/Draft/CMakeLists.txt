@@ -333,6 +333,10 @@ ADD_CUSTOM_TARGET(Draft ALL
     DEPENDS ${Draft_QRC_SRCS}
     SOURCES ${Draft_SRCS_all} ${DraftGuiIcon_SVG}
 )
+add_dependencies(Draft lazy_loader DraftUtils)
+if(BUILD_GUI)
+    add_dependencies(Draft SketcherGui TechDrawGui)
+endif()
 
 fc_copy_sources(Draft "${CMAKE_BINARY_DIR}/Mod/Draft" ${Draft_SRCS_all})
 

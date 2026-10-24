@@ -155,6 +155,8 @@ public:
     NativeElementGeometry() = default;
     NativeElementGeometry(const NativeGeometry&, const char*, const Base::Matrix4D&);
     NativeRegionQuery classifyRegion(const Base::Vector3d&, double) const override;
+    std::vector<Base::Vector3d> snapPoints(const char* mode, const Base::Vector3d& cursor,
+                                         double coordinateTolerance) const;
     std::vector<const char*> getElementTypes() const override;
     unsigned long countSubElements(const char*) const override;
     Data::Segment* getSubElement(const char*, unsigned long) const override;

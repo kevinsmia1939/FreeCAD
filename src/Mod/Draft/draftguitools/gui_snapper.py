@@ -389,9 +389,16 @@ class Snapper:
         snaps = []
         point = App.Vector(self.snapInfo["x"], self.snapInfo["y"], self.snapInfo["z"])
         comp = self.snapInfo["Component"]
-        shape = Part.getShape(parent, subname, needSubElement=True, noElementMap=True)
+        target = obj.getLinkedObject(True)
+        native_geometry = ("Geometry" in target.PropertiesList and target.getTypeIdOfProperty("Geometry") in
+                           ("Implicit::PropertyNativeGeometry", "Implicit::PropertyNativeSolidGeometry"))
+        if not native_geometry:
+            shape = Part.getShape(parent, subname, needSubElement=True, noElementMap=True)
 
-        if not shape.isNull():
+        if native_geometry:
+            snaps.extend(self.snapToNative(parent, subname, point))
+
+        elif not shape.isNull():
             snaps.extend(self.snapToSpecials(obj, lastpoint, eline))
 
             if utils.get_type(obj) == "Polygon":
@@ -767,6 +774,29 @@ class Snapper:
                             self.setCursor("grid")
                             return np
         return point
+
+    def snapToNative(self, parent, subname, point):
+        """Snap to stored native topology, with the selected path placement once.
+
+        The native query supports vertices and finite edges. Unsupported faces,
+        stale references, unavailable builds and unqualified transforms yield no
+        candidate; display triangles and generic Part shape conversion are not
+        used. Importing Draft alone does not require the experimental module.
+        """
+        snaps = []
+        try:
+            import Implicit
+            geometry = parent.getSubObject(subname)
+            if geometry is None:
+                return snaps
+            for mode, marker in (("Endpoint", "endpoint"), ("Midpoint", "midpoint"), ("Near", "passive")):
+                if self.isEnabled(mode):
+                    for coordinates in Implicit.snapNative(geometry, mode, tuple(point)):
+                        candidate = App.Vector(*coordinates)
+                        snaps.append([candidate, marker, self.toWP(candidate)])
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError, ReferenceError):
+            return []
+        return snaps
 
     def snapToEndpoints(self, shape, point=None):
         """Return a list of endpoints snap locations."""

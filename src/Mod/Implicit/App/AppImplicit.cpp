@@ -83,6 +83,12 @@ public:
     {
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
         add_varargs_method(
+            "snapNative",
+            &Module::snapNative,
+            "snapNative(selectedNativeGeometry, mode, cursor, coordinateTolerance=.1) -> points "
+            "on stored vertex/edge topology; not implicit-face projection"
+        );
+        add_varargs_method(
             "nativeGeometry",
             &Module::nativeGeometry,
             "nativeGeometry(feature) -> owned native ComplexGeoData snapshot; local coordinates"
@@ -191,6 +197,32 @@ public:
 
 private:
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+    Py::Object snapNative(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        const char* mode = nullptr;
+        Base::Vector3d cursor;
+        double tolerance = .1;
+        if (!PyArg_ParseTuple(args.ptr(), "O!s(ddd)|d", &Data::ComplexGeoDataPy::Type, &object,
+                             &mode, &cursor.x, &cursor.y, &cursor.z, &tolerance)) {
+            throw Py::Exception();
+        }
+        const auto* geometry = dynamic_cast<const NativeElementGeometry*>(
+            static_cast<Data::ComplexGeoDataPy*>(object)->getComplexGeoDataPtr());
+        if (!geometry) {
+            throw Py::TypeError("Native snapping requires an owned selected native subelement");
+        }
+        try {
+            Py::List result;
+            for (const auto& point : geometry->snapPoints(mode, cursor, tolerance)) {
+                result.append(vectorToPython(point));
+            }
+            return result;
+        }
+        catch (const Base::Exception& error) {
+            throw Py::ValueError(error.what());
+        }
+    }
     Py::Object classifyNative(const Py::Tuple& args)
     {
         PyObject* object = nullptr;

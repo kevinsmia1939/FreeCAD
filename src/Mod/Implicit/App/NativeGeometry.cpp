@@ -427,6 +427,119 @@ std::vector<const char*> NativeElementGeometry::getElementTypes() const
 {
     return {"Element"};
 }
+std::vector<Base::Vector3d> NativeElementGeometry::snapPoints(
+    const char* mode, const Base::Vector3d& cursor, double coordinateTolerance
+) const
+{
+    const bool endpoint = std::strcmp(mode, "Endpoint") == 0;
+    const bool midpoint = std::strcmp(mode, "Midpoint") == 0;
+    const bool near = std::strcmp(mode, "Near") == 0;
+    if (!endpoint && !midpoint && !near) {
+        throw Base::ValueError("Native snapping supports Endpoint, Midpoint and Near");
+    }
+    if (!std::isfinite(coordinateTolerance) || coordinateTolerance <= 0
+        || !std::isfinite(cursor.x) || !std::isfinite(cursor.y) || !std::isfinite(cursor.z)) {
+        throw Base::ValueError("Native snapping requires finite coordinates and positive coordinate tolerance");
+    }
+    const auto& shape = checkedSegment(element.get(), boundary).shape;
+    if (shape.ShapeType() != TopAbs_VERTEX && shape.ShapeType() != TopAbs_EDGE) {
+        return {}; // No mesh triangle, untrimmed surface or whole-region fallback.
+    }
+    // These are picks on stored topology, not a new implicit-surface accuracy
+    // certificate. Refuse coordinate scales which cannot resolve the requested
+    // model-length precision. Work locally to avoid subtracting large offsets
+    // when measuring an edge's length or projecting to its finite segments.
+    const auto domain = fieldBounds(boundary->Faces.back());
+    const double extent[] = {std::max(std::abs(domain.MinX), std::abs(domain.MaxX)),
+                             std::max(std::abs(domain.MinY), std::abs(domain.MaxY)),
+                             std::max(std::abs(domain.MinZ), std::abs(domain.MaxZ))};
+    long double magnitude = 1;
+    for (int row = 0; row < 3; ++row) {
+        magnitude += std::abs(static_cast<long double>(placement[row][3]));
+        if (near) {
+            magnitude += std::abs(static_cast<long double>(cursor[row]));
+        }
+        for (int column = 0; column < 3; ++column) {
+            magnitude += std::abs(static_cast<long double>(placement[row][column])) * extent[column];
+        }
+    }
+    if (512 * std::numeric_limits<double>::epsilon() * magnitude >= coordinateTolerance) {
+        throw Base::ValueError("Native snap coordinate precision is exhausted");
+    }
+    std::vector<Base::Vector3d> result;
+    if (endpoint) {
+        const auto append = [&](const TopoDS_Vertex& vertex) {
+            const auto p = BRep_Tool::Pnt(vertex);
+            result.emplace_back(p.X(), p.Y(), p.Z());
+        };
+        if (shape.ShapeType() == TopAbs_VERTEX) {
+            append(TopoDS::Vertex(shape));
+        }
+        else {
+            TopoDS_Vertex first, last;
+            TopExp::Vertices(TopoDS::Edge(shape), first, last, true);
+            append(first);
+            if (!first.IsSame(last)) {
+                append(last);
+            }
+        }
+    }
+    else if (shape.ShapeType() == TopAbs_EDGE) {
+        std::vector<Base::Vector3d> points;
+        std::vector<Line> lines;
+        boundaryLines(shape, points, lines);
+        long double length = 0;
+        for (const auto& line : lines) {
+            length += (points[line.I2] - points[line.I1]).Length();
+        }
+        if (!std::isfinite(length) || length <= 0) {
+            throw Base::ValueError("Native snap edge has no finite length");
+        }
+        if (midpoint) {
+            long double remaining = length / 2;
+            for (const auto& line : lines) {
+                const auto delta = points[line.I2] - points[line.I1];
+                const double size = delta.Length();
+                if (size > 0 && remaining <= size) {
+                    result.push_back(points[line.I1] + delta * static_cast<double>(remaining / size));
+                    break;
+                }
+                remaining -= size;
+            }
+        }
+        else {
+            auto inverse = placement;
+            inverse.inverse();
+            auto local = cursor;
+            placePoint(inverse, local);
+            double best = std::numeric_limits<double>::infinity();
+            Base::Vector3d candidate;
+            for (const auto& line : lines) {
+                const auto& a = points[line.I1];
+                const auto delta = points[line.I2] - a;
+                const double squared = delta.Sqr();
+                if (squared <= 0) {
+                    continue;
+                }
+                const double parameter = std::clamp((local - a).Dot(delta) / squared, 0., 1.);
+                const auto projected = a + delta * parameter;
+                const double distance = (local - projected).Sqr();
+                if (distance < best) {
+                    best = distance;
+                    candidate = projected;
+                }
+            }
+            if (!std::isfinite(best)) {
+                throw Base::ValueError("Native snap projection is unresolved");
+            }
+            result.push_back(candidate);
+        }
+    }
+    for (auto& point : result) {
+        placePoint(placement, point);
+    }
+    return result;
+}
 unsigned long NativeElementGeometry::countSubElements(const char* type) const
 {
     return element && std::strcmp(type, "Element") == 0 ? 1 : 0;

@@ -380,6 +380,14 @@ def set_working_plane_to_object_under_cursor(mouseEvent):
     else:
         obj = App.ActiveDocument.getObject(objectUnderCursor["Object"])
         sub = objectUnderCursor["Component"]
+    # Native implicit picks are ComplexGeoData, without a parametric Part face.
+    # Keep the current working plane rather than attempting UV-based alignment.
+    try:
+        selected = obj.getSubObject(sub)
+    except (RuntimeError, ValueError, ReferenceError):
+        return None
+    if getattr(selected, "ShapeType", None) != "Face":
+        return None
     shape = Part.getShape(obj, sub, needSubElement=True, retType=0)
 
     if wp.align_to_face(shape, _hist_add=False):
@@ -407,12 +415,13 @@ def set_working_plane_to_selected_object():
         return None
 
     sels = Gui.Selection.getSelectionEx("", 0)
-
-    if (
-        len(sels) == 1
-        and len(sels[0].SubObjects) == 1
-        and sels[0].SubObjects[0].ShapeType == "Face"
-    ):
+    if len(sels) != 1:
+        return None
+    try:
+        selected = sels[0].SubObjects
+    except (RuntimeError, ValueError, ReferenceError):
+        return None
+    if len(selected) == 1 and getattr(selected[0], "ShapeType", None) == "Face":
         import Part
 
         shape = Part.getShape(
