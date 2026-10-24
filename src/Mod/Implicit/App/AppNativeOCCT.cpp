@@ -1173,7 +1173,7 @@ PyObject* checkMixedCoverage(PyObject* args)
 
 PyObject* sectionResult(const BRep_ImplicitPlaneSection::Result& section, bool lattice);
 
-template<bool Periodic>
+template<bool Periodic, bool Boundary = false>
 PyObject* traceGyroidCylinder(PyObject* args)
 {
     PyObject *object, *origin, *axis, *direction;
@@ -1196,11 +1196,51 @@ PyObject* traceGyroidCylinder(PyObject* args)
     catch (const Standard_ConstructionError&) {
         throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
     }
-    const auto section = Periodic ? BRep_ImplicitCylinderSection::TracePeriodic(*face, settings)
-                                  : BRep_ImplicitCylinderSection::Trace(*face, settings);
+    BRep_ImplicitCylinderSection::BoundaryResult boundary;
+    const auto section = [&] {
+        if constexpr (Boundary) {
+            boundary = BRep_ImplicitCylinderSection::TracePeriodicBoundary(*face, settings);
+            return boundary.Section;
+        }
+        return Periodic ? BRep_ImplicitCylinderSection::TracePeriodic(*face, settings)
+                        : BRep_ImplicitCylinderSection::Trace(*face, settings);
+    }();
     Object result(sectionResult(section, false));
     if (!result || !set(result.get(), "periodic", PyBool_FromLong(Periodic))) {
         return nullptr;
+    }
+    if constexpr (Boundary) {
+        Object roots(PyList_New(0)), curveRoots(PyList_New(0));
+        if (!roots || !curveRoots) {
+            return nullptr;
+        }
+        for (size_t index = 0; index < boundary.Roots.size(); ++index) {
+            const auto& root = boundary.Roots[index];
+            Object item(Py_BuildValue("{s:K,s:i,s:(dd),s:d}",
+                "id", static_cast<unsigned long long>(index + 1),
+                "height_boundary", root.HeightBoundary,
+                "angle_bracket", root.AngleFirst, root.AngleLast,
+                "vertex_tolerance", BRep_Tool::Tolerance(root.Vertex)));
+            if (!item || !set(item.get(), "point", xyz(BRep_Tool::Pnt(root.Vertex).XYZ()))
+                || !set(item.get(), "first", xyz(root.First.XYZ()))
+                || !set(item.get(), "last", xyz(root.Last.XYZ()))
+                || PyList_Append(roots.get(), item.get()) < 0) {
+                return nullptr;
+            }
+        }
+        for (const auto& ends : boundary.CurveRoots) {
+            Object item(Py_BuildValue("(KK)", static_cast<unsigned long long>(ends[0]),
+                                      static_cast<unsigned long long>(ends[1])));
+            if (!item || PyList_Append(curveRoots.get(), item.get()) < 0) {
+                return nullptr;
+            }
+        }
+        if (!set(result.get(), "boundary_roots", roots.release())
+            || !set(result.get(), "curve_boundary_roots", curveRoots.release())
+            || !set(result.get(), "boundary_incidence_verified",
+                    PyBool_FromLong(boundary.BoundaryIncidenceVerified))) {
+            return nullptr;
+        }
     }
     return result.release();
 }
@@ -2700,6 +2740,8 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
+    {"trace_gyroid_cylinder_boundary", checked<traceGyroidCylinder<true, true>>, METH_VARARGS,
+     "Trace a full cylinder and retain end-cap root brackets/curve endpoint IDs; not native trims or solids."},
     {"trace_gyroid_cylinder_periodic", checked<traceGyroidCylinder<true>>, METH_VARARGS,
      "Trace a full cylindrical chart with one shared seam; curves, not native trim/solid topology."},
     {"trace_gyroid_cylinder", checked<traceGyroidCylinder<false>>, METH_VARARGS,

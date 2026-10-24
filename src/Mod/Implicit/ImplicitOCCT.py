@@ -40,6 +40,19 @@ from _ImplicitOCCT import start_boundary_job as _start_boundary_job, take_bounda
 from _ImplicitOCCT import trace_gyroid_plane as _trace_gyroid_plane
 from _ImplicitOCCT import trace_gyroid_cylinder as _trace_gyroid_cylinder
 from _ImplicitOCCT import trace_gyroid_cylinder_periodic as _trace_gyroid_cylinder_periodic
+from _ImplicitOCCT import trace_gyroid_cylinder_boundary as _trace_gyroid_cylinder_boundary
+
+
+def trace_gyroid_cylinder_boundary(face, origin, axis, x_direction, radius, angle_bounds,
+                                   height_bounds, distance_tolerance=.1, maximum_cells=512):
+    """Full-turn curves and shared end-cap root descriptors from one native pass.
+
+    Root IDs are snapshot-local, 1-based, ordered by height boundary then angle.
+    Closed curves have endpoint IDs (0,0). Unresolved queries expose no anchors.
+    This report does not expose mutable OCCT vertices or prove native trim/solids.
+    """
+    return _trace_gyroid_cylinder_boundary(face, origin, axis, x_direction, radius, angle_bounds,
+                                           height_bounds, distance_tolerance, maximum_cells)
 
 
 def trace_gyroid_cylinder(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,

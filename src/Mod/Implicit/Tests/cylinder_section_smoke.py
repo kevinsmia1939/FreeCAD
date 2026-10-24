@@ -32,6 +32,33 @@ assert points[0] == points[-1]
 assert not periodic["topology_validated"] and not periodic["solid_validated"]
 assert native.trace_gyroid_cylinder(restored, *periodic_args, periodic=True) == periodic
 assert not native.trace_gyroid_cylinder(face, *periodic_args, maximum_cells=4, periodic=True)["resolved"]
+boundary_args = (*args[:3], .5, (3, 3 + 2 * math.pi), (0, .5))
+boundary = native.trace_gyroid_cylinder_boundary(face, *boundary_args)
+assert boundary["resolved"] and boundary["boundary_incidence_verified"]
+assert not boundary["topology_validated"] and not boundary["solid_validated"]
+roots = boundary["boundary_roots"]
+assert len(roots) == 4 and [r["height_boundary"] for r in roots] == [0, 0, 1, 1]
+uses = [0] * 4
+for curve, endpoints in zip(boundary["curves"], boundary["curve_boundary_roots"]):
+    assert not curve["closed"]
+    for point, root_id in zip((curve["points"][0], curve["points"][-1]), endpoints):
+        assert 1 <= root_id <= 4
+        uses[root_id - 1] += 1
+        root = roots[root_id - 1]
+        assert point == root["point"]
+        assert point[2] == (0 if root["height_boundary"] == 0 else .5)
+        assert native.value(face, root["first"]) * native.value(face, root["last"]) <= 0
+        for endpoint in (root["first"], root["last"]):
+            assert math.dist(point, endpoint) <= root["vertex_tolerance"]
+assert uses == [1] * 4
+assert native.trace_gyroid_cylinder_boundary(restored, *boundary_args) == boundary
+failed = native.trace_gyroid_cylinder_boundary(face, *boundary_args, maximum_cells=4)
+assert not failed["resolved"] and not failed["boundary_incidence_verified"]
+assert not failed["boundary_roots"] and not failed["curve_boundary_roots"]
+closed_boundary = native.trace_gyroid_cylinder_boundary(face, *periodic_args)
+assert closed_boundary["resolved"] and closed_boundary["boundary_incidence_verified"]
+assert not closed_boundary["boundary_roots"] and closed_boundary["curve_boundary_roots"] == [(0, 0)]
+assert native.dumps(face) == record
 try:
     native.trace_gyroid_cylinder(face, *periodic_args, periodic=1)
 except TypeError:
