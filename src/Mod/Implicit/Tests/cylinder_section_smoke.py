@@ -22,6 +22,22 @@ assert placed["resolved"] and len(placed["curves"]) == len(result["curves"])
 restored = native.loads(record)
 assert native.trace_gyroid_cylinder(restored, *args) == result
 assert native.dumps(face) == record
+assert not result["periodic"]
+periodic_args = (*args[:3], .5, (.27, .27 + 2 * math.pi), (-1.7, 1.3))
+periodic = native.trace_gyroid_cylinder(face, *periodic_args, periodic=True)
+assert periodic["resolved"] and periodic["periodic"]
+assert len(periodic["curves"]) == 1 and periodic["curves"][0]["closed"]
+points = periodic["curves"][0]["points"]
+assert points[0] == points[-1]
+assert not periodic["topology_validated"] and not periodic["solid_validated"]
+assert native.trace_gyroid_cylinder(restored, *periodic_args, periodic=True) == periodic
+assert not native.trace_gyroid_cylinder(face, *periodic_args, maximum_cells=4, periodic=True)["resolved"]
+try:
+    native.trace_gyroid_cylinder(face, *periodic_args, periodic=1)
+except TypeError:
+    pass
+else:
+    raise AssertionError("Non-bool periodic policy accepted")
 for radius, angles in ((-1, (.27, 1.1)), (2, (0, 2 * math.pi))):
     try:
         native.trace_gyroid_cylinder(face, *args[:3], radius, angles, args[-1])

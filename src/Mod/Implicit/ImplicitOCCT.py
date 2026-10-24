@@ -39,18 +39,24 @@ from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, 
 from _ImplicitOCCT import start_boundary_job as _start_boundary_job, take_boundary_job as _take_boundary_job
 from _ImplicitOCCT import trace_gyroid_plane as _trace_gyroid_plane
 from _ImplicitOCCT import trace_gyroid_cylinder as _trace_gyroid_cylinder
+from _ImplicitOCCT import trace_gyroid_cylinder_periodic as _trace_gyroid_cylinder_periodic
 
 
 def trace_gyroid_cylinder(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
-                          distance_tolerance=.1, maximum_cells=512):
-    """Bounded curves on an open cylinder chart; no periodic join/trim/solid proof.
+                          distance_tolerance=.1, maximum_cells=512, periodic=False):
+    """Bounded open/full cylinder curves; no native trim/solid proof.
 
     Angles are radians, heights/radius/tolerance are model lengths. The whole
     conservative cylinder enclosure must fit in the mathematical field domain.
     Check resolved before consuming curves; ambiguous partial output is diagnostic.
+    Explicit periodic=True requires angle_max == angle_min + 2*pi and shares
+    seam root identity. It does not weld nearby endpoints or create trim topology.
     """
-    return _trace_gyroid_cylinder(face, origin, axis, x_direction, radius, angle_bounds,
-                                  height_bounds, distance_tolerance, maximum_cells)
+    if type(periodic) is not bool:
+        raise TypeError("periodic must be an explicit bool")
+    trace = _trace_gyroid_cylinder_periodic if periodic else _trace_gyroid_cylinder
+    return trace(face, origin, axis, x_direction, radius, angle_bounds,
+                 height_bounds, distance_tolerance, maximum_cells)
 
 
 def trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,

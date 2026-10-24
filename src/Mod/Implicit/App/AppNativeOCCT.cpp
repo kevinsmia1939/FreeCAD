@@ -1173,6 +1173,7 @@ PyObject* checkMixedCoverage(PyObject* args)
 
 PyObject* sectionResult(const BRep_ImplicitPlaneSection::Result& section, bool lattice);
 
+template<bool Periodic>
 PyObject* traceGyroidCylinder(PyObject* args)
 {
     PyObject *object, *origin, *axis, *direction;
@@ -1195,7 +1196,13 @@ PyObject* traceGyroidCylinder(PyObject* args)
     catch (const Standard_ConstructionError&) {
         throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
     }
-    return sectionResult(BRep_ImplicitCylinderSection::Trace(*face, settings), false);
+    const auto section = Periodic ? BRep_ImplicitCylinderSection::TracePeriodic(*face, settings)
+                                  : BRep_ImplicitCylinderSection::Trace(*face, settings);
+    Object result(sectionResult(section, false));
+    if (!result || !set(result.get(), "periodic", PyBool_FromLong(Periodic))) {
+        return nullptr;
+    }
+    return result.release();
 }
 
 PyObject* traceGyroidPlane(PyObject* args)
@@ -2693,7 +2700,9 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
-    {"trace_gyroid_cylinder", checked<traceGyroidCylinder>, METH_VARARGS,
+    {"trace_gyroid_cylinder_periodic", checked<traceGyroidCylinder<true>>, METH_VARARGS,
+     "Trace a full cylindrical chart with one shared seam; curves, not native trim/solid topology."},
+    {"trace_gyroid_cylinder", checked<traceGyroidCylinder<false>>, METH_VARARGS,
      "Trace a finite open cylinder chart; bounded polylines, not trim topology or solids."},
     {"trace_gyroid_plane", checked<traceGyroidPlane>, METH_VARARGS,
      "Trace a bounded plane rectangle; polylines and isolated point contacts, not native trim B-Reps. "
