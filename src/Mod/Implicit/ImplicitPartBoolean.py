@@ -44,10 +44,14 @@ class BooleanTask:
         self.closed, self.result, self.source, self.job = False, None, None, None
         self.boundary = self.completed = None
         self.phase = "boundary"
-        self.form = QtWidgets.QWidget()
+        self.form = QtWidgets.QScrollArea()
+        self.form.setWidgetResizable(True)
+        self.panel = QtWidgets.QWidget()
+        self.form.setWidget(self.panel)
         self.form.setObjectName("ImplicitPartBoolean")
         self.form.setWindowTitle("Part native " + operation)
-        layout = QtWidgets.QFormLayout(self.form)
+        layout = QtWidgets.QFormLayout(self.panel)
+        layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapAllRows)
         label = QtWidgets.QLabel(field.Label + " / " + box.Label)
         label.setTextFormat(QtCore.Qt.PlainText)
         layout.addRow("Operands", label)
@@ -96,7 +100,10 @@ class BooleanTask:
         if self.job is not None:
             native.cancel_native_job(self.job)
             self.job = None
-        self.timer.stop()
+        try:
+            self.timer.stop()
+        except RuntimeError:
+            pass  # The parent widget may already be destroying its timer.
 
     def _destroyed(self, *_args):
         if not self.closed:
@@ -181,6 +188,8 @@ class BooleanTask:
             if not active or active[1] != transaction:
                 raise RuntimeError("Native Boolean publication transaction changed")
         try:
+            self._prepare_operands()
+            owned()
             source = doc.addObject("Implicit::NativeFeaturePython", "NativeMixedBoundary")
             MixedBoundary(source)
             source.Field, source.Box, source.Operation = self.field, self.box, self.operation
@@ -196,7 +205,7 @@ class BooleanTask:
             solid.Source, solid.BackgroundRecompute = source, True
             solid.GeometricTolerance, solid.TopologyResolution = tolerance, resolution
             for name, value in controls: setattr(solid, name, value)
-            solid.Label = "Native Part " + self.operation
+            solid.Label = getattr(self, "result_label", "Native Part " + self.operation)
             NativeSolidView(solid.ViewObject)
             solid.Proxy.publish(solid, self.completed)
             owned(); doc.recompute(); owned()
@@ -211,6 +220,9 @@ class BooleanTask:
             active = App.getActiveTransaction()
             if active and active[1] == transaction: doc.abortTransaction()
             raise
+
+    def _prepare_operands(self):
+        """Existing Part selections already have live document operands."""
 
     def reject(self):
         self._destroyed()

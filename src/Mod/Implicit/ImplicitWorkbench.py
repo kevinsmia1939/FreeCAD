@@ -12,8 +12,8 @@ class ImplicitModelingWorkbench(Gui.Workbench):
     def Initialize(self):
         import ImplicitCommands
         commands = ImplicitCommands.register()
-        self.appendToolbar("Implicit Modelling", ["Implicit_Gyroid"])
-        self.appendMenu("Implicit Modelling", ["Implicit_Gyroid"])
+        self.appendToolbar("Implicit Modelling", ["Implicit_NativeGyroid"])
+        self.appendMenu("Implicit Modelling", ["Implicit_NativeGyroid", "Implicit_Gyroid"])
         native = [name for name in ("Implicit_NativeTopologyDemo", "Implicit_OCCTMixedCommon",
                                    "Implicit_OCCTMixedBoxMinusField") if name in commands]
         if native:

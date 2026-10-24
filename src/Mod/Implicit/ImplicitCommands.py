@@ -83,6 +83,11 @@ def create_gyroid():
     return feature
 
 
+def create_native_gyroid():
+    from ImplicitGyroidCreate import open_task
+    return open_task()
+
+
 def create_topology_demo():
     """Supported native trim fixture, explicitly separate from the simple primitive."""
     import ImplicitMixed
@@ -277,7 +282,7 @@ class Command:
 
     def GetResources(self):
         return {"MenuText": self.title, "ToolTip": self.title,
-                "Pixmap": GYROID_ICON if self.action in (create_gyroid, create_topology_demo) else ""}
+                "Pixmap": GYROID_ICON if self.action in (create_gyroid, create_native_gyroid, create_topology_demo) else ""}
 
     def IsActive(self):
         return True
@@ -295,6 +300,7 @@ def register():
     commands = [
         ("Implicit_Sphere", "Implicit sphere", lambda: primitive("sphere")),
         ("Implicit_Gyroid", "Add gyroid (10 mm cube)", create_gyroid),
+        ("Implicit_NativeGyroid", "Add native gyroid solid (10 mm cube)", create_native_gyroid),
         ("Implicit_Band", "Bounded gyroid band", lambda: primitive("band")),
         ("Implicit_BRep", "Live B-Rep field", brep_link),
         ("Implicit_Union", "Linked field union", lambda: boolean("union")),
