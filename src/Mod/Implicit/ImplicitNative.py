@@ -14,6 +14,15 @@ import subprocess
 import FreeCAD as App
 
 
+def clear_subelement_selection(obj):
+    """Discard snapshot-local references while retaining object/property selection."""
+    import FreeCADGui as Gui
+    for selected in Gui.Selection.getSelectionEx():
+        if (selected.Object.getLinkedObject(True) == obj
+                and any(selected.SubElementNames)):
+            Gui.Selection.removeSelection(selected.Object)
+
+
 def worker_path():
     """Executable selection is environment/user configuration, never FCStd data."""
     configured = os.environ.get("IMPLICIT_OCCT_NATIVE_WORKER") or App.ParamGet(
@@ -153,6 +162,10 @@ class NativeBoundaryView:
 
     def attach(self, view):
         from pivy import coin
+        self._view = view
+        if any(name in view.Object.PropertiesList for name in ("MixedSchema", "SolidSchema")):
+            from ImplicitBuildFeedback import attach
+            attach(self, view)
         # Dynamic view properties may not have been replayed on FCStd restore.
         if "SurfaceColor" not in view.PropertiesList:
             view.addProperty("App::PropertyColor", "SurfaceColor", "Display")
@@ -171,6 +184,12 @@ class NativeBoundaryView:
         view.addDisplayMode(self._root, "Native boundary")
         self.onChanged(view, "SurfaceColor")
         self.updateData(view.Object, "NativeRevision")
+
+    def getIcon(self):
+        if hasattr(self, "_view") and "BuildFeedback" in self._view.PropertiesList:
+            from ImplicitBuildFeedback import icon
+            return icon(self)
+        return None
 
     def updateData(self, obj, prop):
         if prop != "NativeRevision" or not hasattr(self, "_faces"):

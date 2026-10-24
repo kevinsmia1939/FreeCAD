@@ -396,7 +396,8 @@ class MixedBoundaryView(NativeBoundaryView):
         if prop in ("ShowBoundaryEdges", "ShowVertices") and hasattr(self, "_vertex_root"):
             self._topology_visibility(view)
             import FreeCADGui as Gui
-            Gui.Selection.removeSelection(view.Object)
+            from ImplicitNative import clear_subelement_selection
+            clear_subelement_selection(view.Object)
         if (prop in ("ShowImplicitSurface", "SurfaceTolerance", "SurfaceMaximumCells")
                 and hasattr(self, "_surface_faces")
                 and all(name in view.PropertiesList for name in
@@ -486,7 +487,8 @@ class MixedBoundaryView(NativeBoundaryView):
         # Names are snapshot-local indices, not a history mapping across edits.
         # Discard current selections before a new snapshot can reuse an index.
         import FreeCADGui as Gui
-        Gui.Selection.removeSelection(obj)
+        from ImplicitNative import clear_subelement_selection
+        clear_subelement_selection(obj)
         self._native_geometry = Implicit.nativeGeometry(obj) if obj.Geometry is not None else None
         caps = getattr(obj.Proxy, "_mesh", None)
         cap_data = caps["faces"] if caps else []

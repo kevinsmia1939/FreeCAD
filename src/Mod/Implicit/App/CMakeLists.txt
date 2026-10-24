@@ -4,6 +4,8 @@ set(Implicit_LIBS FreeCADApp)
 
 set(Implicit_SRCS
     AppImplicit.cpp
+    PropertyBuildFeedback.cpp
+    PropertyBuildFeedback.h
     Feature.cpp
     Feature.h
     Field.cpp

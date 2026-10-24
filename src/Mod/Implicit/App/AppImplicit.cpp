@@ -11,6 +11,7 @@
 #include "Feature.h"
 #include "FieldGraph.h"
 #include "SurfaceMesh.h"
+#include "PropertyBuildFeedback.h"
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
 # include "NativeGeometry.h"
 # include <App/ComplexGeoDataPy.h>
@@ -758,6 +759,7 @@ PyMOD_INIT_FUNC(Implicit)
 {
     PyObject* module = Implicit::initModule();
     Implicit::Feature::init();
+    Implicit::PropertyBuildFeedback::init();
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
     Implicit::NativeGeometry::init();
     Implicit::NativeElementGeometry::init();

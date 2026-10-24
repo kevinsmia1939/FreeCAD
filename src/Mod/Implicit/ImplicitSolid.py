@@ -411,9 +411,8 @@ class NativeSolidView(NativeBoundaryView):
         self._key = None  # Publish a successful cache key only after scene upload.
         # Instance selections hold the target's old subelement indices too.
         # Clear only this target and its link instances, not unrelated objects.
-        for selected in Gui.Selection.getSelectionEx():
-            if selected.Object.getLinkedObject(True) == obj:
-                Gui.Selection.removeSelection(selected.Object)
+        from ImplicitNative import clear_subelement_selection
+        clear_subelement_selection(obj)
         self._content.removeAllChildren()
         self._elements, self._picked = {}, {}
         self._mesh = None
