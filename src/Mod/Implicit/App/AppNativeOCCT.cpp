@@ -7,6 +7,7 @@
 #include <BRep_Tool.hxx>
 #include <BRep_ImplicitIO.hxx>
 #include <BRep_ImplicitTool.hxx>
+#include <BRep_ImplicitCylinderSection.hxx>
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
@@ -1170,6 +1171,33 @@ PyObject* checkMixedCoverage(PyObject* args)
     return result.release();
 }
 
+PyObject* sectionResult(const BRep_ImplicitPlaneSection::Result& section, bool lattice);
+
+PyObject* traceGyroidCylinder(PyObject* args)
+{
+    PyObject *object, *origin, *axis, *direction;
+    BRep_ImplicitCylinderSection::Settings settings;
+    gp_Pnt p, n, x;
+    if (!PyArg_ParseTuple(args, "OOOOd(dd)(dd)|di", &object, &origin, &axis, &direction,
+        &settings.Radius, &settings.AngleMinimum, &settings.AngleMaximum,
+        &settings.HeightMinimum, &settings.HeightMaximum,
+        &settings.DistanceTolerance, &settings.MaximumCells)
+        || !point(origin, p) || !point(axis, n) || !point(direction, x)) {
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    try {
+        settings.Frame = gp_Ax2(p, gp_Dir(gp_Vec(n.XYZ())), gp_Dir(gp_Vec(x.XYZ())));
+    }
+    catch (const Standard_ConstructionError&) {
+        throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
+    }
+    return sectionResult(BRep_ImplicitCylinderSection::Trace(*face, settings), false);
+}
+
 PyObject* traceGyroidPlane(PyObject* args)
 {
     PyObject *object, *origin, *normal, *direction, *lattice = Py_False;
@@ -1197,6 +1225,11 @@ PyObject* traceGyroidPlane(PyObject* args)
         throw Standard_DomainError("Section normal and X direction must define a finite nondegenerate plane frame");
     }
     const auto section = BRep_ImplicitPlaneSection::Trace(*face, settings);
+    return sectionResult(section, settings.AllowExactLatticeNodes);
+}
+
+PyObject* sectionResult(const BRep_ImplicitPlaneSection::Result& section, bool lattice)
+{
     Object result(Py_BuildValue("{s:O,s:i,s:i,s:i,s:i,s:i,s:d,s:d,s:d,s:i,s:O,s:O,s:O}",
         "resolved", section.Resolved ? Py_True : Py_False,
         "resolution", section.Resolution, "unresolved_cells", section.UnresolvedCells,
@@ -1205,7 +1238,7 @@ PyObject* traceGyroidPlane(PyObject* args)
         "geometric_bound", section.GeometricBound, "maximum_residual", section.MaximumResidual,
         "maximum_root_bracket", section.MaximumRootBracket,
         "exact_lattice_node_count", section.ExactLatticeNodeCount,
-        "allow_exact_lattice_nodes", settings.AllowExactLatticeNodes ? Py_True : Py_False,
+        "allow_exact_lattice_nodes", lattice ? Py_True : Py_False,
         "topology_validated", Py_False, "solid_validated", Py_False));
     Object curves(PyList_New(0)), contacts(PyList_New(0));
     if (!result || !curves || !contacts) {
@@ -2660,6 +2693,8 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
+    {"trace_gyroid_cylinder", checked<traceGyroidCylinder>, METH_VARARGS,
+     "Trace a finite open cylinder chart; bounded polylines, not trim topology or solids."},
     {"trace_gyroid_plane", checked<traceGyroidPlane>, METH_VARARGS,
      "Trace a bounded plane rectangle; polylines and isolated point contacts, not native trim B-Reps. "
      "Exact lattice-node mode is explicit and requires identity field placement/coordinate planes."},

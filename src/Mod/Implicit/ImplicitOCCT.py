@@ -38,6 +38,19 @@ from _ImplicitOCCT import (sphere, gyroid, value, gradient, normal, in_domain, i
 from _ImplicitOCCT import mixed_box as _mixed_box, loads_mixed as _loads_mixed, dumps_mixed, inspect_mixed as _inspect_mixed
 from _ImplicitOCCT import start_boundary_job as _start_boundary_job, take_boundary_job as _take_boundary_job
 from _ImplicitOCCT import trace_gyroid_plane as _trace_gyroid_plane
+from _ImplicitOCCT import trace_gyroid_cylinder as _trace_gyroid_cylinder
+
+
+def trace_gyroid_cylinder(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                          distance_tolerance=.1, maximum_cells=512):
+    """Bounded curves on an open cylinder chart; no periodic join/trim/solid proof.
+
+    Angles are radians, heights/radius/tolerance are model lengths. The whole
+    conservative cylinder enclosure must fit in the mathematical field domain.
+    Check resolved before consuming curves; ambiguous partial output is diagnostic.
+    """
+    return _trace_gyroid_cylinder(face, origin, axis, x_direction, radius, angle_bounds,
+                                  height_bounds, distance_tolerance, maximum_cells)
 
 
 def trace_gyroid_plane(face, origin, normal, x_direction, u_bounds, v_bounds,
