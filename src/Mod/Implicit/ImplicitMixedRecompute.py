@@ -3,6 +3,7 @@
 import FreeCAD as App
 import ImplicitOCCT as native
 from ImplicitSolidRecompute import Scheduler as SolidScheduler
+from ImplicitOperands import box_shape
 
 
 class Request:
@@ -12,10 +13,10 @@ class Request:
         self.identity = (self.document_name, obj.Name)
         self.inputs = fingerprint
         field, box = self.proxy._validate_operands(obj)
-        self.operands = field, box
+        self.operands = obj.Field, obj.Box
         self.face = native.gyroid(field.Period.Value, field.IsoValue, tuple(field.DomainMin),
                                   tuple(field.DomainMax), obj.GeometricTolerance.Value)
-        self.field_record, self.box_record = native.dumps(self.face), box.Shape.exportBrepToString()
+        self.field_record, self.box_record = native.dumps(self.face), box_shape(box).exportBrepToString()
         self.settings = ("common" if str(obj.Operation) == "Common" else "box_minus_field",
                          obj.GeometricTolerance.Value, obj.MaximumCells, str(obj.CornerPolicy).lower())
         active = App.getActiveTransaction()

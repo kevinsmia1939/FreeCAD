@@ -3,6 +3,7 @@
 import math
 import FreeCAD as App
 from ImplicitMixed import MixedBoundary
+from ImplicitOperands import resolve, box_shape
 
 
 def expressions(obj):
@@ -16,8 +17,10 @@ def driven(obj, name):
 def sources_for(source, field=None, box=None):
     return [o for o in source.Document.Objects
             if isinstance(getattr(o, "Proxy", None), MixedBoundary)
-            and (o == source or (field is not None and o.Field == field)
-                 or (box is not None and o.Box == box))]
+            and (o == source or (field is not None and o.Field is not None
+                                    and o.Field.getLinkedObject(True) == field)
+                 or (box is not None and o.Box is not None
+                     and o.Box.getLinkedObject(True) == box))]
 
 
 def invalidate(sources):
@@ -65,27 +68,29 @@ class SourceEdits:
         self.solid, self.source = solid, solid.Source
         if self.source is None or not isinstance(getattr(self.source, "Proxy", None), MixedBoundary):
             raise ValueError("Source has no editable live mixed recipe")
-        self.field, self.box = self.source.Field, self.source.Box
+        self.field_input, self.box_input = self.source.Field, self.source.Box
+        self.field, _ = MixedBoundary._validate_operands(self.source)
+        self.box = resolve(self.box_input)[0]
         if (self.source.Document != solid.Document or self.field is None or self.box is None
                 or self.field.Document != solid.Document or self.box.Document != solid.Document
                 or self.field.TypeId != "Implicit::Feature" or str(self.field.Function) != "Gyroid"
                 or str(self.field.Operation) != "Definition" or self.field.FieldGraph
-                or not self.field.InsideNegative or self.field.getGlobalPlacement() != App.Placement()):
+                or not self.field.InsideNegative):
             raise ValueError("Only same-document identity-placed primitive gyroid inputs are editable")
         self.parametric_box = self.box.TypeId == "Part::Box"
         self.remember()
 
     def bounds(self, values=None):
         if self.parametric_box:
-            matrix = self.box.getGlobalPlacement().toMatrix()
-            if self.box.getGlobalPlacement() != self.box.Placement or any(
+            matrix = resolve(self.box_input)[1]
+            if any(
                     getattr(matrix, "A%d%d" % (r, c)) != (1. if r == c else 0.)
                     for r in range(1, 4) for c in range(1, 4)):
                 raise ValueError("Box dimension editing requires an exact pure translation")
-            low = tuple(self.box.Placement.Base)
+            low = (matrix.A14, matrix.A24, matrix.A34)
             size = values or self.values()
             return low, tuple(low[a] + size[name] for a, name in enumerate(self.names[2:]))
-        points = [tuple(v.Point) for v in self.box.Shape.Vertexes]
+        points = [tuple(v.Point) for v in box_shape(self.box_input).Vertexes]
         if not points:
             raise ValueError("Missing conventional box geometry")
         return (tuple(min(p[a] for p in points) for a in range(3)),
@@ -129,7 +134,7 @@ class SourceEdits:
         return (tuple(self.values().items()), tuple(self.field.DomainMin), tuple(self.field.DomainMax),
                 tuple(sorted(expressions(self.field).items())), tuple(sorted(expressions(self.box).items())),
                 tuple(self.bounds()), str(self.source.Operation), self.source.GeometricTolerance.Value,
-                self.source.MaximumCells, str(self.source.CornerPolicy),
+                self.source.MaximumCells, str(self.source.CornerPolicy), MixedBoundary._fingerprint(self.source),
                 tuple((name, getattr(self.field, name).Value) for name in self.names[2:]
                       if name in self.field.PropertiesList
                       and self.field.getTypeIdOfProperty(name) == "App::PropertyLength"))
@@ -138,7 +143,9 @@ class SourceEdits:
         self.observed = self.signature()
 
     def prepare(self, values, fit_domain):
-        if (self.solid.Source != self.source or self.source.Field != self.field or self.source.Box != self.box
+        if (self.solid.Source != self.source or self.source.Field != self.field_input
+                or self.source.Box != self.box_input
+                or resolve(self.field_input)[0] is not self.field or resolve(self.box_input)[0] is not self.box
                 or self.signature() != self.observed):
             raise ValueError("Source inputs changed externally; cancel and reopen the editor")
         values = {name: float(values[name]) for name in self.names}
@@ -197,4 +204,14 @@ class SourceEdits:
         if not self.field.recompute():
             raise ValueError("Gyroid field/domain expressions failed to recompute")
         self.field.purgeTouched()
+        # Native task preparation requires clean immutable input snapshots.
+        # Recompute only alias wrappers, in dependency order, after their shared
+        # primitive targets; ordinary source/solid scheduling remains task-owned.
+        aliases = {leaf for source in affected for operand in (source.Field, source.Box)
+                   for leaf in [operand] + operand.OutListRecursive
+                   if leaf.isDerivedFrom("App::Link")}
+        for alias in sorted(aliases, key=lambda leaf: len(leaf.OutListRecursive)):
+            if not alias.recompute():
+                raise ValueError("Operand link failed to recompute")
+            alias.purgeTouched()
         return affected

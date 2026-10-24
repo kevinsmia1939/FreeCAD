@@ -6,6 +6,7 @@ import FreeCADGui as Gui
 from PySide import QtCore, QtWidgets
 import ImplicitOCCT as native
 from ImplicitMixed import MixedBoundary, _create
+from ImplicitOperands import box_shape
 
 
 def capture(field, box, operation, tolerance, cells, policy):
@@ -14,10 +15,11 @@ def capture(field, box, operation, tolerance, cells, policy):
         raise ValueError("Recompute valid same-document operands before creating a boundary")
     recipe = SimpleNamespace(Field=field, Box=box, Operation=operation,
         GeometricTolerance=SimpleNamespace(Value=tolerance), MaximumCells=cells, CornerPolicy=policy)
-    MixedBoundary._validate_operands(recipe)
+    resolved_field, _ = MixedBoundary._validate_operands(recipe)
+    field = resolved_field
     face = native.gyroid(field.Period.Value, field.IsoValue, tuple(field.DomainMin),
                           tuple(field.DomainMax), tolerance)
-    return (MixedBoundary._fingerprint(recipe), native.dumps(face), box.Shape.exportBrepToString(),
+    return (MixedBoundary._fingerprint(recipe), native.dumps(face), box_shape(box).exportBrepToString(),
             ("common" if operation == "Common" else "box_minus_field", tolerance, cells, policy.lower()))
 
 

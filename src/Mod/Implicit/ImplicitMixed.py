@@ -9,14 +9,15 @@ import FreeCAD as App
 import Implicit  # Register native property/owner types before document restoration.
 import hashlib
 import json
+from ImplicitOperands import primitive_field, box_shape, resolve, watch_containers
 
 
 class MixedBoundary:
     def __init__(self, obj):
         self._boundary = self._mesh = self._section = None
         for name, kind, value in (
-            ("MixedSchema", "Integer", 2), ("Field", "Link", None),
-            ("Box", "Link", None), ("GeometricTolerance", "Length", .1),
+            ("MixedSchema", "Integer", 2), ("Field", "LinkGlobal", None),
+            ("Box", "LinkGlobal", None), ("GeometricTolerance", "Length", .1),
             ("MaximumCells", "Integer", 512), ("SeamCount", "Integer", 0),
             ("BoxEdgeRootCount", "Integer", 0),
             ("PlanarCapCount", "Integer", 0), ("SeamGeometricBound", "Float", 0),
@@ -39,6 +40,17 @@ class MixedBoundary:
 
     @staticmethod
     def _ensure_geometry(obj):
+        watch_containers()
+        for name in ("Field", "Box"):
+            if name in obj.PropertiesList and obj.getTypeIdOfProperty(name) == "App::PropertyLink":
+                value = getattr(obj, name)
+                expressions = [(path, expression) for path, expression in obj.ExpressionEngine
+                               if str(path).lstrip(".") == name]
+                obj.removeProperty(name)
+                obj.addProperty("App::PropertyLinkGlobal", name, "Native mixed boundary")
+                setattr(obj, name, value)
+                for path, expression in expressions:
+                    obj.setExpression(path, expression)
         if "BackgroundRecompute" not in obj.PropertiesList:
             obj.addProperty("App::PropertyBool", "BackgroundRecompute", "Native mixed boundary",
                             "Queue GUI source tracing; geometry is unavailable until completion")
@@ -65,17 +77,24 @@ class MixedBoundary:
             return [float(v) if v != 0 else 0.0 for v in vector]
         def vertices(shape):
             return sorted(xyz(v.Point) for v in shape.Vertexes)
-        shape = obj.Box.Shape
+        field, _box = MixedBoundary._validate_operands(obj)
+        shape = box_shape(obj.Box)
         descriptor = {
             "schema": 1, "field": obj.Field.Name, "box": obj.Box.Name,
-            "period": obj.Field.Period.Value, "iso": obj.Field.IsoValue,
-            "minimum": xyz(obj.Field.DomainMin), "maximum": xyz(obj.Field.DomainMax),
+            "period": field.Period.Value, "iso": field.IsoValue,
+            "minimum": xyz(field.DomainMin), "maximum": xyz(field.DomainMax),
             "operation": str(obj.Operation), "tolerance": obj.GeometricTolerance.Value,
             "budget": obj.MaximumCells, "shape_type": shape.ShapeType,
             "vertices": vertices(shape),
             "edges": sorted((type(e.Curve).__name__, vertices(e)) for e in shape.Edges),
             "faces": sorted((type(f.Surface).__name__, xyz(f.normalAt(0, 0)), vertices(f)) for f in shape.Faces),
         }
+        if (field is not obj.Field or resolve(obj.Box)[0] is not obj.Box
+                or obj.Field.getParentGeoFeatureGroup() is not None
+                or obj.Box.getParentGeoFeatureGroup() is not None):
+            descriptor["instances"] = [
+                (operand.Name, resolve(operand)[0].Name, xyz(resolve(operand)[1].A))
+                for operand in (obj.Field, obj.Box)]
         # Preserve the legacy Reject fingerprint, so adding this property on
         # restore does not silently retrace unchanged saved native topology.
         if str(getattr(obj, "CornerPolicy", "Reject")) != "Reject":
@@ -130,15 +149,11 @@ class MixedBoundary:
 
     @staticmethod
     def _validate_operands(obj):
-        field, box = obj.Field, obj.Box
-        if (field is None or field.TypeId != "Implicit::Feature"
-                or not field.isValid() or str(field.Operation) != "Definition"
-                or str(field.Function) != "Gyroid" or field.FieldGraph
-                or not field.InsideNegative or field.getGlobalPlacement() != App.Placement()):
-            raise ValueError("Field must be a valid identity-placed primitive gyroid with F<=0 inside")
-        if (box is None or not box.isValid() or not box.isDerivedFrom("Part::Feature")
-                or box.getGlobalPlacement() != box.Placement):
-            raise ValueError("Box must link a valid conventional Part solid")
+        if (obj.Field is None or obj.Box is None or obj.Field.Document != obj.Box.Document
+                or getattr(obj, "Document", obj.Field.Document) != obj.Field.Document):
+            raise ValueError("Native mixed operands must be in the same document")
+        field, box = primitive_field(obj.Field), obj.Box
+        box_shape(box)
         return field, box
 
     def publish(self, obj, completed, fingerprint, field_record, box_record, settings):
@@ -194,7 +209,7 @@ class MixedBoundary:
                 data = native.inspect_mixed(obj.Geometry)
                 mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
                 metadata = native.info(data["implicit_face"])
-                points = [tuple(v.Point) for v in box.Shape.Vertexes]
+                points = [tuple(v.Point) for v in box_shape(box).Vertexes]
                 minimum = tuple(min(p[a] for p in points) for a in range(3))
                 maximum = tuple(max(p[a] for p in points) for a in range(3))
                 if (data["period"] != field.Period.Value or data["isovalue"] != field.IsoValue
@@ -212,7 +227,7 @@ class MixedBoundary:
                 face = native.gyroid(field.Period, field.IsoValue, tuple(field.DomainMin),
                                      tuple(field.DomainMax), obj.GeometricTolerance.Value)
                 mode = "common" if str(obj.Operation) == "Common" else "box_minus_field"
-                data = native.mixed_box(face, box.Shape, mode,
+                data = native.mixed_box(face, box_shape(box), mode,
                                         obj.GeometricTolerance.Value, obj.MaximumCells,
                                         corner_policy=str(obj.CornerPolicy).lower())
                 self._publishing = True
@@ -909,8 +924,8 @@ def _create(field, box, operation="Common", corner_policy="Reject", *, completed
 def selected(operation="Common"):
     import FreeCADGui as Gui
     objects = Gui.Selection.getSelection()
-    fields = [o for o in objects if o.TypeId == "Implicit::Feature"]
-    boxes = [o for o in objects if o.isDerivedFrom("Part::Feature")]
+    fields = [o for o in objects if o.getLinkedObject(True).TypeId == "Implicit::Feature"]
+    boxes = [o for o in objects if o.getLinkedObject(True).isDerivedFrom("Part::Feature")]
     if len(objects) != 2 or len(fields) != 1 or len(boxes) != 1:
         raise ValueError("Select one primitive native gyroid and one conventional Part box")
     from ImplicitMixedCreate import open_task
