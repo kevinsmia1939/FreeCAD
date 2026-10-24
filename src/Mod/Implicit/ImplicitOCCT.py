@@ -41,6 +41,19 @@ from _ImplicitOCCT import trace_gyroid_plane as _trace_gyroid_plane
 from _ImplicitOCCT import trace_gyroid_cylinder as _trace_gyroid_cylinder
 from _ImplicitOCCT import trace_gyroid_cylinder_periodic as _trace_gyroid_cylinder_periodic
 from _ImplicitOCCT import trace_gyroid_cylinder_boundary as _trace_gyroid_cylinder_boundary
+from _ImplicitOCCT import build_gyroid_cylinder_rings as _build_gyroid_cylinder_rings
+
+
+def build_gyroid_cylinder_rings(face, origin, axis, x_direction, radius, angle_bounds,
+                                height_bounds, distance_tolerance=.1, maximum_cells=512):
+    """Native analytic cap-circle partitions with shared roots and sign intervals.
+
+    Returns copied edge descriptors, not mutable Part shapes. The native result
+    owns actual circle edges. ring_edges_verified is separate from cap topology
+    and solid validation; uncertain root neighborhoods retain their brackets.
+    """
+    return _build_gyroid_cylinder_rings(face, origin, axis, x_direction, radius, angle_bounds,
+                                        height_bounds, distance_tolerance, maximum_cells)
 
 
 def trace_gyroid_cylinder_boundary(face, origin, axis, x_direction, radius, angle_bounds,

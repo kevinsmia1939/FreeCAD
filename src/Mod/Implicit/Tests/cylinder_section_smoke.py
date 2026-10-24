@@ -51,6 +51,27 @@ for curve, endpoints in zip(boundary["curves"], boundary["curve_boundary_roots"]
         for endpoint in (root["first"], root["last"]):
             assert math.dist(point, endpoint) <= root["vertex_tolerance"]
 assert uses == [1] * 4
+rings = native.build_gyroid_cylinder_rings(face, *boundary_args)
+assert rings["ring_edges_verified"] and rings["boundary_incidence_verified"]
+assert not rings["topology_validated"] and not rings["solid_validated"]
+for cap, arcs in enumerate(rings["boundary_rings"]):
+    assert len(arcs) == 2 and arcs[0]["negative"] != arcs[1]["negative"]
+    assert abs(sum(a["angle_range"][1] - a["angle_range"][0] for a in arcs) - 2 * math.pi) < 1e-12
+    for arc in arcs:
+        assert arc["edge_tolerance"] <= .1
+        assert arc["reversed"] == (cap == 0)
+        for name, root_id in (("first", arc["lower_root"]), ("last", arc["upper_root"])):
+            root = rings["boundary_roots"][root_id - 1]
+            assert math.dist(arc[name], root["point"]) <= root["vertex_tolerance"]
+assert native.build_gyroid_cylinder_rings(restored, *boundary_args) == rings
+failed_rings = native.build_gyroid_cylinder_rings(face, *boundary_args, maximum_cells=4)
+assert not failed_rings["ring_edges_verified"] and failed_rings["boundary_rings"] == [[], []]
+empty_placed = native.translated(native.gyroid(10, 10, (-10, -10, -10), (10, 10, 10)), (1000, 0, 0))
+precision_limited = native.build_gyroid_cylinder_rings(
+    empty_placed, (1000, 0, 0), *boundary_args[1:3], .5, boundary_args[4], (-4.2, 3.7),
+    distance_tolerance=2e-9)
+assert precision_limited["resolved"] and not precision_limited["ring_edges_verified"]
+assert precision_limited["boundary_rings"] == [[], []]
 assert native.trace_gyroid_cylinder_boundary(restored, *boundary_args) == boundary
 failed = native.trace_gyroid_cylinder_boundary(face, *boundary_args, maximum_cells=4)
 assert not failed["resolved"] and not failed["boundary_incidence_verified"]
