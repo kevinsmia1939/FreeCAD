@@ -46,6 +46,14 @@ constexpr const char* boundaryName = "ImplicitOCCT.HybridBoundary.v1";
 constexpr const char* shellsName = "ImplicitOCCT.NativeShells.v1";
 constexpr const char* solidsName = "ImplicitOCCT.NativeSolids.v1";
 constexpr const char* cylinderCapsName = "ImplicitOCCT.CylinderCaps.v1";
+constexpr const char* cylinderSidesName = "ImplicitOCCT.CylinderSides.v1";
+
+void destroyCylinderSides(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, cylinderSidesName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinder::Sides*>(PyCapsule_GetPointer(capsule, cylinderSidesName));
+    }
+}
 
 void destroyCylinderCaps(PyObject* capsule)
 {
@@ -1273,6 +1281,41 @@ PyObject* cylinderCapsReport(const BRepClass3d_ImplicitCylinder::Caps& value)
     return result.release();
 }
 
+PyObject* cylinderSidesReport(const BRepClass3d_ImplicitCylinder::Sides& value)
+{
+    Object result(cylinderCapsReport(value.Boundary.Source.Regions));
+    Object faces(PyList_New(0));
+    if (!result || !faces) {
+        return nullptr;
+    }
+    double area = 0, error = 0;
+    for (const auto& face : value.Faces) {
+        std::ostringstream output;
+        BRepTools::Write(face, output);
+        const auto record = output.str();
+        Object serialized(PyUnicode_FromStringAndSize(record.data(), record.size()));
+        GProp_GProps properties;
+        error = std::max(error, BRepGProp::SurfaceProperties(face, properties, 1.e-10));
+        area += properties.Mass();
+        if (!serialized || PyList_Append(faces.get(), serialized.get()) < 0) {
+            return nullptr;
+        }
+    }
+    if (!set(result.get(), "sides_brep", faces.release())
+        || !set(result.get(), "side_topology_validated", PyBool_FromLong(value.TopologyValidated))
+        || !set(result.get(), "side_boundary_verified", PyBool_FromLong(value.Boundary.Verified))
+        || !set(result.get(), "side_reason", PyUnicode_FromString(value.Reason.c_str()))
+        || !set(result.get(), "side_area", PyFloat_FromDouble(area))
+        || !set(result.get(), "side_area_error_estimate", PyFloat_FromDouble(error))
+        || !set(result.get(), "side_contour_bound", PyFloat_FromDouble(
+            value.Boundary.Source.Chart.Graph.Boundary.Section.GeometricBound))
+        || !set(result.get(), "side_surface_deviation_bound", PyFloat_FromDouble(value.Boundary.SurfaceDeviationBound))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+template<bool Side = false>
 PyObject* buildCylinderCaps(PyObject* args)
 {
     PyObject *object, *origin, *axis, *direction, *negative = Py_True;
@@ -1298,6 +1341,20 @@ PyObject* buildCylinderCaps(PyObject* args)
     }
     catch (const Standard_ConstructionError&) {
         throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
+    }
+    if constexpr (Side) {
+        auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::Sides>(
+            BRepClass3d_ImplicitCylinder::BuildSides(*face, s, negative == Py_True, nesting));
+        Object capsule(PyCapsule_New(owned.get(), cylinderSidesName, destroyCylinderSides));
+        if (!capsule) {
+            return nullptr;
+        }
+        const auto* value = owned.release();
+        Object result(cylinderSidesReport(*value));
+        if (!result || !set(result.get(), "sides_handle", capsule.release())) {
+            return nullptr;
+        }
+        return result.release();
     }
     auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::Caps>(
         BRepClass3d_ImplicitCylinder::BuildCaps(*face, s, negative == Py_True, nesting));
@@ -1325,6 +1382,20 @@ PyObject* inspectCylinderCaps(PyObject* args)
     }
     return cylinderCapsReport(*static_cast<const BRepClass3d_ImplicitCylinder::Caps*>(
         PyCapsule_GetPointer(object, cylinderCapsName)));
+}
+
+PyObject* inspectCylinderSides(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderSidesName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned native cylinder-side handle");
+        return nullptr;
+    }
+    return cylinderSidesReport(*static_cast<const BRepClass3d_ImplicitCylinder::Sides*>(
+        PyCapsule_GetPointer(object, cylinderSidesName)));
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -2967,7 +3038,11 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
-    {"build_cylinder_caps", checked<buildCylinderCaps>, METH_VARARGS,
+    {"build_cylinder_sides", checked<buildCylinderCaps<true>>, METH_VARARGS,
+     "Build retained conventional cylinder-side regions; no solid qualification."},
+    {"inspect_cylinder_sides", checked<inspectCylinderSides>, METH_VARARGS,
+     "Inspect an owned cylinder-side snapshot without retracing."},
+    {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
      "Inspect an owned native cylinder-cap snapshot without rebuilding geometry."},

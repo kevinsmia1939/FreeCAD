@@ -46,6 +46,7 @@ from _ImplicitOCCT import build_gyroid_cylinder_rings as _build_gyroid_cylinder_
 from _ImplicitOCCT import restrict_cylinder_local as _restrict_cylinder_local
 from _ImplicitOCCT import trace_gyroid_cylinder_disks as _trace_gyroid_cylinder_disks
 from _ImplicitOCCT import build_cylinder_caps as _build_cylinder_caps, inspect_cylinder_caps as _inspect_cylinder_caps
+from _ImplicitOCCT import build_cylinder_sides as _build_cylinder_sides, inspect_cylinder_sides as _inspect_cylinder_sides
 
 
 def _decode_cylinder_caps(result):
@@ -79,6 +80,37 @@ def build_cylinder_caps(face, origin, axis, x_direction, radius, angle_bounds, h
 
 def inspect_cylinder_caps(handle):
     return _decode_cylinder_caps(_inspect_cylinder_caps(handle))
+
+
+def _decode_cylinder_sides(result):
+    _decode_cylinder_caps(result)
+    result["sides"] = []
+    for record in result.pop("sides_brep"):
+        shape = Part.Shape()
+        shape.importBrepFromString(record)
+        result["sides"].append(shape.Faces[0])
+    return result
+
+
+def build_cylinder_sides(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                         distance_tolerance=.1, maximum_cells=512, negative=True,
+                         maximum_nesting_tests=2000000):
+    """Owned cylindrical material regions and shared cap topology; not solids.
+
+    sides/caps are detached conventional face previews. The native sides_handle
+    owns the shared graph. Side topology and curve bounds do not certify a closed
+    implicit solid or a global field-to-boundary geometry proof.
+    """
+    if type(negative) is not bool:
+        raise TypeError("negative must be an explicit bool")
+    if type(maximum_nesting_tests) is not int or not 1 <= maximum_nesting_tests <= 10000000:
+        raise ValueError("maximum_nesting_tests must be an integer from 1 to 10000000")
+    return _decode_cylinder_sides(_build_cylinder_sides(face, origin, axis, x_direction, radius,
+        angle_bounds, height_bounds, distance_tolerance, maximum_cells, negative, maximum_nesting_tests))
+
+
+def inspect_cylinder_sides(handle):
+    return _decode_cylinder_sides(_inspect_cylinder_sides(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,
