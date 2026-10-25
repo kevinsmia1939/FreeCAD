@@ -68,6 +68,40 @@ for curve, endpoints in zip(boundary["curves"], boundary["curve_boundary_roots"]
         for endpoint in (root["first"], root["last"]):
             assert math.dist(point, endpoint) <= root["vertex_tolerance"]
 assert uses == [1] * 4
+disks = native.trace_gyroid_cylinder_disks(face, *boundary_args)
+assert disks["disk_contours_verified"] and disks["boundary_incidence_verified"]
+assert not disks["topology_validated"] and not disks["solid_validated"]
+disk_uses = [0] * len(disks["boundary_roots"])
+for cap, disk in enumerate(disks["disks"]):
+    assert disk["resolved"] and disk["geometric_bound"] <= .1
+    for curve, endpoints in zip(disk["curves"], disk["curve_boundary_roots"]):
+        assert not curve["closed"]
+        for point, root_id in zip((curve["points"][0], curve["points"][-1]), endpoints):
+            root = disks["boundary_roots"][root_id - 1]
+            disk_uses[root_id - 1] += 1
+            assert point == root["point"] and root["height_boundary"] == cap
+        assert all(math.hypot(*p[:2]) <= .5 + 1e-12 for p in curve["points"])
+assert disk_uses == [1] * 4
+assert native.trace_gyroid_cylinder_disks(restored, *boundary_args) == disks
+failed_disks = native.trace_gyroid_cylinder_disks(face, *boundary_args, maximum_cells=4)
+assert not failed_disks["disk_contours_verified"]
+assert all(not d["curves"] and not d["curve_boundary_roots"] for d in failed_disks["disks"])
+late_source = native.gyroid(10, math.sin(2 * math.pi / 10 * .37), (-10, -10, -10), (10, 10, 10))
+assert native.trace_gyroid_cylinder_disks(late_source, *boundary_args[:-1], (0, .37))["disk_contours_verified"]
+critical_source = native.gyroid(10, math.sqrt(2), (-10, -10, -10), (10, 10, 10))
+late_failure = native.trace_gyroid_cylinder_disks(
+    critical_source, (2.5, 1.25, 0), (0, 0, 1), (1, 0, 0), 1.5,
+    (3, 3 + 2 * math.pi), (-.5, 0))
+assert late_failure["resolved"] and not late_failure["disk_contours_verified"]
+assert all(not d["resolved"] and not d["curves"] for d in late_failure["disks"])
+island = native.gyroid(10, 1.3, (-10, -10, -10), (10, 10, 10))
+island_disks = native.trace_gyroid_cylinder_disks(
+    island, (2.5, 1.25, 0), (0, 0, 1), (1, 0, 0), 1.5,
+    (3, 3 + 2 * math.pi), (0, .02))
+assert island_disks["disk_contours_verified"] and not island_disks["boundary_roots"]
+for disk in island_disks["disks"]:
+    assert len(disk["curves"]) == 1 and disk["curves"][0]["closed"]
+    assert disk["curve_boundary_roots"] == [(0, 0)]
 rings = native.build_gyroid_cylinder_rings(face, *boundary_args)
 assert rings["ring_edges_verified"] and rings["boundary_incidence_verified"]
 assert not rings["topology_validated"] and not rings["solid_validated"]

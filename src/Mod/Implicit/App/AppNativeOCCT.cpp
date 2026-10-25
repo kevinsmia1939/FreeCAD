@@ -1200,7 +1200,7 @@ PyObject* checkMixedCoverage(PyObject* args)
 
 PyObject* sectionResult(const BRep_ImplicitPlaneSection::Result& section, bool lattice);
 
-template<bool Periodic, bool Boundary = false, bool Rings = false>
+template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
 PyObject* traceGyroidCylinder(PyObject* args)
 {
     PyObject *object, *origin, *axis, *direction;
@@ -1225,8 +1225,14 @@ PyObject* traceGyroidCylinder(PyObject* args)
     }
     BRep_ImplicitCylinderSection::BoundaryResult boundary;
     BRep_ImplicitCylinderSection::RingResult rings;
+    BRep_ImplicitCylinderSection::DiskResult disks;
     const auto section = [&] {
-        if constexpr (Rings) {
+        if constexpr (Disks) {
+            disks = BRep_ImplicitCylinderSection::TraceEndCapDisks(*face, settings);
+            boundary = disks.Boundary;
+            return boundary.Section;
+        }
+        else if constexpr (Rings) {
             rings = BRep_ImplicitCylinderSection::BuildBoundaryRings(*face, settings);
             boundary = rings.Boundary;
             return boundary.Section;
@@ -1272,6 +1278,33 @@ PyObject* traceGyroidCylinder(PyObject* args)
             || !set(result.get(), "curve_boundary_roots", curveRoots.release())
             || !set(result.get(), "boundary_incidence_verified",
                     PyBool_FromLong(boundary.BoundaryIncidenceVerified))) {
+            return nullptr;
+        }
+    }
+    if constexpr (Disks) {
+        Object caps(PyList_New(0));
+        if (!caps) {
+            return nullptr;
+        }
+        for (int cap = 0; cap < 2; ++cap) {
+            Object item(sectionResult(disks.Disks[cap], false)), roots(PyList_New(0));
+            if (!item || !roots || PyDict_DelItemString(item.get(), "allow_exact_lattice_nodes") < 0) {
+                return nullptr;
+            }
+            for (const auto& ends : disks.CurveRoots[cap]) {
+                Object pair(Py_BuildValue("(KK)", static_cast<unsigned long long>(ends[0]),
+                                          static_cast<unsigned long long>(ends[1])));
+                if (!pair || PyList_Append(roots.get(), pair.get()) < 0) {
+                    return nullptr;
+                }
+            }
+            if (!set(item.get(), "curve_boundary_roots", roots.release())
+                || PyList_Append(caps.get(), item.get()) < 0) {
+                return nullptr;
+            }
+        }
+        if (!set(result.get(), "disks", caps.release())
+            || !set(result.get(), "disk_contours_verified", PyBool_FromLong(disks.Verified))) {
             return nullptr;
         }
     }
@@ -2807,6 +2840,8 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
+    {"trace_gyroid_cylinder_disks", checked<traceGyroidCylinder<true, true, false, true>>, METH_VARARGS,
+     "Trace disk contours with accepted cells/shared circle roots; not cap regions or solids."},
     {"build_gyroid_cylinder_rings", checked<traceGyroidCylinder<true, true, true>>, METH_VARARGS,
      "Build analytic boundary-circle edges sharing side root vertices; report only, not cap regions/solids."},
     {"trace_gyroid_cylinder_boundary", checked<traceGyroidCylinder<true, true>>, METH_VARARGS,

@@ -44,6 +44,19 @@ from _ImplicitOCCT import trace_gyroid_cylinder_periodic as _trace_gyroid_cylind
 from _ImplicitOCCT import trace_gyroid_cylinder_boundary as _trace_gyroid_cylinder_boundary
 from _ImplicitOCCT import build_gyroid_cylinder_rings as _build_gyroid_cylinder_rings
 from _ImplicitOCCT import restrict_cylinder_local as _restrict_cylinder_local
+from _ImplicitOCCT import trace_gyroid_cylinder_disks as _trace_gyroid_cylinder_disks
+
+
+def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,
+                                height_bounds, distance_tolerance=.1, maximum_cells=512):
+    """Disk contours, including interior loops, attached by accepted-cell/root IDs.
+
+    Check disk_contours_verified. The parent resolved flag describes the side
+    section; failed disk batches publish no cap curves. No native cap-region,
+    cylindrical-face or solid validation follows from these polylines.
+    """
+    return _trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,
+                                        height_bounds, distance_tolerance, maximum_cells)
 
 
 def restrict_cylinder_local(face, origin, axis, x_direction, radius, height_bounds):
