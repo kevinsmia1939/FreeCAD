@@ -50,6 +50,8 @@ from _ImplicitOCCT import build_cylinder_sides as _build_cylinder_sides, inspect
 from _ImplicitOCCT import build_cylinder_implicit_faces as _build_cylinder_implicit_faces
 from _ImplicitOCCT import inspect_cylinder_implicit_faces as _inspect_cylinder_implicit_faces
 from _ImplicitOCCT import build_cylinder_shell as _build_cylinder_shell, inspect_cylinder_shell as _inspect_cylinder_shell
+from _ImplicitOCCT import check_cylinder_shell_tolerance as _check_cylinder_shell_tolerance
+from _ImplicitOCCT import inspect_cylinder_shell_tolerance as _inspect_cylinder_shell_tolerance
 
 
 def _decode_cylinder_caps(result):
@@ -156,6 +158,26 @@ def build_cylinder_shell(face, origin, axis, x_direction, radius, angle_bounds, 
 
 def inspect_cylinder_shell(handle):
     return _decode_cylinder_sides(_inspect_cylinder_shell(handle))
+
+
+def check_cylinder_shell_tolerance(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                                    distance_tolerance=.1, maximum_cells=512, negative=True,
+                                    maximum_nesting_tests=2000000):
+    """Audit declared tolerances and combined field-wire bounds on an owned shell.
+
+    A pass is not a global geometry or solid certificate. The generated field
+    face uses the requested trim tolerance; the source record stays unchanged.
+    """
+    if type(negative) is not bool:
+        raise TypeError("negative must be an explicit bool")
+    if type(maximum_nesting_tests) is not int or not 1 <= maximum_nesting_tests <= 10000000:
+        raise ValueError("maximum_nesting_tests must be an integer from 1 to 10000000")
+    return _decode_cylinder_sides(_check_cylinder_shell_tolerance(face, origin, axis, x_direction, radius,
+        angle_bounds, height_bounds, distance_tolerance, maximum_cells, negative, maximum_nesting_tests))
+
+
+def inspect_cylinder_shell_tolerance(handle):
+    return _decode_cylinder_sides(_inspect_cylinder_shell_tolerance(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,
