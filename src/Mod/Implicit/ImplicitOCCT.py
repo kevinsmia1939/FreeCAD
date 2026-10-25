@@ -52,6 +52,8 @@ from _ImplicitOCCT import inspect_cylinder_implicit_faces as _inspect_cylinder_i
 from _ImplicitOCCT import build_cylinder_shell as _build_cylinder_shell, inspect_cylinder_shell as _inspect_cylinder_shell
 from _ImplicitOCCT import check_cylinder_shell_tolerance as _check_cylinder_shell_tolerance
 from _ImplicitOCCT import inspect_cylinder_shell_tolerance as _inspect_cylinder_shell_tolerance
+from _ImplicitOCCT import check_cylinder_shell_geometry as _check_cylinder_shell_geometry
+from _ImplicitOCCT import inspect_cylinder_shell_geometry as _inspect_cylinder_shell_geometry
 
 
 def _decode_cylinder_caps(result):
@@ -178,6 +180,27 @@ def check_cylinder_shell_tolerance(face, origin, axis, x_direction, radius, angl
 
 def inspect_cylinder_shell_tolerance(handle):
     return _decode_cylinder_sides(_inspect_cylinder_shell_tolerance(handle))
+
+
+def check_cylinder_shell_geometry(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                                   distance_tolerance=.1, maximum_cells=512, negative=True,
+                                   maximum_nesting_tests=2000000):
+    """Bidirectional boundary bounds for qualified full-disk cylinder shells.
+
+    This owns the guarded topology/tolerance/reference graph. It covers the full
+    cylinder chart, with 24 binary levels, 200000 cells and 20 million trim tests
+    by default. It does not construct a solid or certify volume/general consumers.
+    """
+    if type(negative) is not bool:
+        raise TypeError("negative must be an explicit bool")
+    if type(maximum_nesting_tests) is not int or not 1 <= maximum_nesting_tests <= 10000000:
+        raise ValueError("maximum_nesting_tests must be an integer from 1 to 10000000")
+    return _decode_cylinder_sides(_check_cylinder_shell_geometry(face, origin, axis, x_direction, radius,
+        angle_bounds, height_bounds, distance_tolerance, maximum_cells, negative, maximum_nesting_tests))
+
+
+def inspect_cylinder_shell_geometry(handle):
+    return _decode_cylinder_sides(_inspect_cylinder_shell_geometry(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,

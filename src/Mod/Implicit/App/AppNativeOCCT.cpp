@@ -50,6 +50,14 @@ constexpr const char* cylinderSidesName = "ImplicitOCCT.CylinderSides.v1";
 constexpr const char* cylinderFacesName = "ImplicitOCCT.CylinderFaces.v1";
 constexpr const char* cylinderShellName = "ImplicitOCCT.CylinderShell.v1";
 constexpr const char* cylinderToleranceName = "ImplicitOCCT.CylinderTolerance.v1";
+constexpr const char* cylinderGeometryName = "ImplicitOCCT.CylinderGeometry.v1";
+
+void destroyCylinderGeometry(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, cylinderGeometryName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinder::ShellGeometry*>(PyCapsule_GetPointer(capsule, cylinderGeometryName));
+    }
+}
 
 void destroyCylinderTolerance(PyObject* capsule)
 {
@@ -1396,6 +1404,22 @@ PyObject* cylinderToleranceReport(const BRepClass3d_ImplicitCylinder::ShellToler
     return result.release();
 }
 
+PyObject* cylinderGeometryReport(const BRepClass3d_ImplicitCylinder::ShellGeometry& value)
+{
+    Object result(cylinderToleranceReport(value.Source));
+    if (!result
+        || !set(result.get(), "shell_geometry_validated", PyBool_FromLong(value.BoundaryVerified))
+        || !set(result.get(), "geometry_reason", PyUnicode_FromString(value.Reason.c_str()))
+        || !set(result.get(), "mathematical_to_native_bound", PyFloat_FromDouble(value.MathematicalToNativeBound))
+        || !set(result.get(), "native_to_mathematical_bound", PyFloat_FromDouble(value.NativeToMathematicalBound))
+        || !set(result.get(), "boundary_bound", PyFloat_FromDouble(value.BoundaryBound))
+        || !set(result.get(), "geometry_cells", PyLong_FromSize_t(value.Cells))
+        || !set(result.get(), "geometry_segment_tests", PyLong_FromSize_t(value.SegmentTests))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 template<int Mode = 0>
 PyObject* buildCylinderCaps(PyObject* args)
 {
@@ -1422,6 +1446,20 @@ PyObject* buildCylinderCaps(PyObject* args)
     }
     catch (const Standard_ConstructionError&) {
         throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
+    }
+    if constexpr (Mode == 5) {
+        auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::ShellGeometry>(
+            BRepClass3d_ImplicitCylinder::CheckShellGeometry(*face, s, negative == Py_True, nesting));
+        Object capsule(PyCapsule_New(owned.get(), cylinderGeometryName, destroyCylinderGeometry));
+        if (!capsule) {
+            return nullptr;
+        }
+        const auto* value = owned.release();
+        Object result(cylinderGeometryReport(*value));
+        if (!result || !set(result.get(), "geometry_handle", capsule.release())) {
+            return nullptr;
+        }
+        return result.release();
     }
     if constexpr (Mode == 4) {
         auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::ShellTolerance>(
@@ -1561,6 +1599,20 @@ PyObject* inspectCylinderTolerance(PyObject* args)
     }
     return cylinderToleranceReport(*static_cast<const BRepClass3d_ImplicitCylinder::ShellTolerance*>(
         PyCapsule_GetPointer(object, cylinderToleranceName)));
+}
+
+PyObject* inspectCylinderGeometry(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderGeometryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned cylinder-shell geometry handle");
+        return nullptr;
+    }
+    return cylinderGeometryReport(*static_cast<const BRepClass3d_ImplicitCylinder::ShellGeometry*>(
+        PyCapsule_GetPointer(object, cylinderGeometryName)));
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -3219,6 +3271,10 @@ PyMethodDef methods[] = {
      "Audit combined contour/chord bounds and declared shell tolerances; no solid proof."},
     {"inspect_cylinder_shell_tolerance", checked<inspectCylinderTolerance>, METH_VARARGS,
      "Inspect an owned native cylinder tolerance audit without rebuilding."},
+    {"check_cylinder_shell_geometry", checked<buildCylinderCaps<5>>, METH_VARARGS,
+     "Bound both directions of native/mathematical shell boundary correspondence."},
+    {"inspect_cylinder_shell_geometry", checked<inspectCylinderGeometry>, METH_VARARGS,
+     "Inspect an owned native cylinder geometry result without rebuilding."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
