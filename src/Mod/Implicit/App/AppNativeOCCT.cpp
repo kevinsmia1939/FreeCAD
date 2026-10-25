@@ -1615,6 +1615,29 @@ PyObject* inspectCylinderGeometry(PyObject* args)
         PyCapsule_GetPointer(object, cylinderGeometryName)));
 }
 
+PyObject* classifyCylinderMaterial(PyObject* args)
+{
+    PyObject *object, *query;
+    double tolerance = 1.e-7;
+    gp_Pnt p;
+    if (!PyArg_ParseTuple(args, "OO|d", &object, &query, &tolerance) || !point(query, p)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderGeometryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned cylinder-shell geometry handle");
+        return nullptr;
+    }
+    const auto& geometry = *static_cast<const BRepClass3d_ImplicitCylinder::ShellGeometry*>(
+        PyCapsule_GetPointer(object, cylinderGeometryName));
+    const auto result = BRepClass3d_ImplicitCylinder::ClassifyMaterial(geometry, p, tolerance);
+    const char* state = result.State == TopAbs_IN ? "IN" : result.State == TopAbs_OUT ? "OUT"
+        : result.State == TopAbs_ON ? "ON" : "UNKNOWN";
+    return Py_BuildValue("{s:s,s:d,s:d,s:d,s:O}", "mathematical_state", state,
+        "distance_lower_bound", result.DistanceLowerBound, "distance_upper_bound", result.DistanceUpperBound,
+        "field_value_at_domain_projection", result.FieldValueAtDomainProjection,
+        "boundary_allowance_separated", result.BoundaryAllowanceSeparated ? Py_True : Py_False);
+}
+
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
 PyObject* traceGyroidCylinder(PyObject* args)
 {
@@ -3275,6 +3298,8 @@ PyMethodDef methods[] = {
      "Bound both directions of native/mathematical shell boundary correspondence."},
     {"inspect_cylinder_shell_geometry", checked<inspectCylinderGeometry>, METH_VARARGS,
      "Inspect an owned native cylinder geometry result without rebuilding."},
+    {"classify_cylinder_material", checked<classifyCylinderMaterial>, METH_VARARGS,
+     "Classify an owned cylinder material recipe with model-length distance bounds."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,

@@ -54,6 +54,7 @@ from _ImplicitOCCT import check_cylinder_shell_tolerance as _check_cylinder_shel
 from _ImplicitOCCT import inspect_cylinder_shell_tolerance as _inspect_cylinder_shell_tolerance
 from _ImplicitOCCT import check_cylinder_shell_geometry as _check_cylinder_shell_geometry
 from _ImplicitOCCT import inspect_cylinder_shell_geometry as _inspect_cylinder_shell_geometry
+from _ImplicitOCCT import classify_cylinder_material as _classify_cylinder_material
 
 
 def _decode_cylinder_caps(result):
@@ -201,6 +202,16 @@ def check_cylinder_shell_geometry(face, origin, axis, x_direction, radius, angle
 
 def inspect_cylinder_shell_geometry(handle):
     return _decode_cylinder_sides(_inspect_cylinder_shell_geometry(handle))
+
+
+def classify_cylinder_material(geometry_handle, point, point_tolerance=1.e-7):
+    """Mathematical material IN/OUT/ON/UNKNOWN with model-length distance bounds.
+
+    boundary_allowance_separated distinguishes clearance beyond the retained
+    boundary approximation allowance. This does not invoke an OCCT solid
+    classifier or qualify generic consumers. UNKNOWN is a supported result.
+    """
+    return _classify_cylinder_material(geometry_handle, point, point_tolerance)
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,

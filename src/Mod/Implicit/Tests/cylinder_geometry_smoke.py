@@ -19,9 +19,26 @@ for negative in (True, False):
     result["shell_geometry_validated"] = False
     fresh = native.inspect_cylinder_shell_geometry(handle)
     assert fresh["shell_geometry_validated"] and fresh["field_record"] == record
+    root = math.asin(.21) * 10 / (2 * math.pi)
+    inside = native.classify_cylinder_material(handle, (0, 0, -.5))
+    assert inside["mathematical_state"] == ("IN" if negative else "OUT")
+    on = native.classify_cylinder_material(handle, (0, 0, root))
+    assert on["mathematical_state"] == "ON" and not on["boundary_allowance_separated"]
+    far = native.classify_cylinder_material(handle, (2, 0, 0))
+    assert far["mathematical_state"] == "OUT" and far["boundary_allowance_separated"]
+    margin = native.classify_cylinder_material(handle, (0, 0, root + .05))
+    assert margin["distance_upper_bound"] > margin["distance_lower_bound"]
+    band = (margin["distance_upper_bound"] + margin["distance_lower_bound"]) / 2
+    assert native.classify_cylinder_material(handle, (0, 0, root + .05), band)["mathematical_state"] == "UNKNOWN"
 partial = native.check_cylinder_shell_geometry(source, *(args[:-1] + ((0, .5),)))
 assert not partial["shell_geometry_validated"] and partial["boundary_bound"] == 0
 assert not partial["solid_validated"]
+try:
+    native.classify_cylinder_material(partial["geometry_handle"], (0, 0, 0))
+except (ValueError, RuntimeError):
+    pass
+else:
+    raise AssertionError("Unqualified geometry was accepted for material classification")
 try:
     native.inspect_cylinder_shell_geometry(source)
 except TypeError:
