@@ -51,6 +51,31 @@ constexpr const char* cylinderFacesName = "ImplicitOCCT.CylinderFaces.v1";
 constexpr const char* cylinderShellName = "ImplicitOCCT.CylinderShell.v1";
 constexpr const char* cylinderToleranceName = "ImplicitOCCT.CylinderTolerance.v1";
 constexpr const char* cylinderGeometryName = "ImplicitOCCT.CylinderGeometry.v1";
+constexpr const char* cylinderSolidName = "ImplicitOCCT.CylinderSolid.v1";
+
+void destroyCylinderSolid(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, cylinderSolidName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinder::NativeSolid*>(PyCapsule_GetPointer(capsule, cylinderSolidName));
+    }
+}
+
+const BRepClass3d_ImplicitCylinder::ShellGeometry* getCylinderGeometryOwner(PyObject* object)
+{
+    if (PyCapsule_IsValid(object, cylinderGeometryName)) {
+        return static_cast<const BRepClass3d_ImplicitCylinder::ShellGeometry*>(PyCapsule_GetPointer(object, cylinderGeometryName));
+    }
+    if (PyCapsule_IsValid(object, cylinderSolidName)) {
+        const auto* value = static_cast<const BRepClass3d_ImplicitCylinder::NativeSolid*>(PyCapsule_GetPointer(object, cylinderSolidName));
+        if (!value->SolidValidated) {
+            PyErr_SetString(PyExc_ValueError, "native cylinder solid is not qualified");
+            return nullptr;
+        }
+        return &value->Source;
+    }
+    PyErr_SetString(PyExc_TypeError, "expected an owned cylinder geometry or qualified solid handle");
+    return nullptr;
+}
 
 void destroyCylinderGeometry(PyObject* capsule)
 {
@@ -1623,19 +1648,87 @@ PyObject* classifyCylinderMaterial(PyObject* args)
     if (!PyArg_ParseTuple(args, "OO|d", &object, &query, &tolerance) || !point(query, p)) {
         return nullptr;
     }
-    if (!PyCapsule_IsValid(object, cylinderGeometryName)) {
-        PyErr_SetString(PyExc_TypeError, "expected an owned cylinder-shell geometry handle");
+    const auto* geometry = getCylinderGeometryOwner(object);
+    if (!geometry) {
         return nullptr;
     }
-    const auto& geometry = *static_cast<const BRepClass3d_ImplicitCylinder::ShellGeometry*>(
-        PyCapsule_GetPointer(object, cylinderGeometryName));
-    const auto result = BRepClass3d_ImplicitCylinder::ClassifyMaterial(geometry, p, tolerance);
+    const auto result = BRepClass3d_ImplicitCylinder::ClassifyMaterial(*geometry, p, tolerance);
     const char* state = result.State == TopAbs_IN ? "IN" : result.State == TopAbs_OUT ? "OUT"
         : result.State == TopAbs_ON ? "ON" : "UNKNOWN";
     return Py_BuildValue("{s:s,s:d,s:d,s:d,s:O}", "mathematical_state", state,
         "distance_lower_bound", result.DistanceLowerBound, "distance_upper_bound", result.DistanceUpperBound,
         "field_value_at_domain_projection", result.FieldValueAtDomainProjection,
         "boundary_allowance_separated", result.BoundaryAllowanceSeparated ? Py_True : Py_False);
+}
+
+PyObject* cylinderVolumeReport(const BRepClass3d_ImplicitCylinder::VolumeBounds& value)
+{
+    return Py_BuildValue("{s:O,s:d,s:d,s:d,s:d,s:K,s:K,s:s,s:s}",
+        "volume_verified", value.Verified ? Py_True : Py_False,
+        "volume_lower", value.Lower, "volume_upper", value.Upper, "cylinder_volume", value.CylinderVolume,
+        "volume_tolerance", value.AbsoluteTolerance, "volume_cells", static_cast<unsigned long long>(value.Cells),
+        "volume_root_tests", static_cast<unsigned long long>(value.RootTests), "volume_reason", value.Reason.c_str(),
+        "volume_kind", "mathematical_material");
+}
+
+PyObject* cylinderSolidReport(const BRepClass3d_ImplicitCylinder::NativeSolid& value)
+{
+    Object result(cylinderGeometryReport(value.Source)), volume(cylinderVolumeReport(value.Volume));
+    if (!result || !volume || PyDict_Update(result.get(), volume.get()) < 0
+        || !set(result.get(), "solid_validated", PyBool_FromLong(value.SolidValidated))
+        || !set(result.get(), "solid_constructed", PyBool_FromLong(!value.Solid.IsNull()))
+        || !set(result.get(), "solid_closed", PyBool_FromLong(!value.Solid.IsNull() && value.Solid.Closed()))
+        || !set(result.get(), "solid_shape_type", PyUnicode_FromString(value.Solid.IsNull() ? "Null" : "Solid"))
+        || !set(result.get(), "solid_generic_occt_supported", PyBool_FromLong(false))
+        || !set(result.get(), "solid_reason", PyUnicode_FromString(value.Reason.c_str()))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+template<bool Solid>
+PyObject* cylinderMaterialVolume(PyObject* args)
+{
+    PyObject* object;
+    BRepClass3d_ImplicitCylinder::VolumeSettings settings;
+    unsigned long long cells = settings.MaximumCells, roots = settings.MaximumRootTests;
+    if (!PyArg_ParseTuple(args, "O|diKK", &object, &settings.AbsoluteTolerance, &settings.MaximumDepth, &cells, &roots)) {
+        return nullptr;
+    }
+    settings.MaximumCells = cells; settings.MaximumRootTests = roots;
+    const auto* geometry = getCylinderGeometryOwner(object);
+    if (!geometry) {
+        return nullptr;
+    }
+    if constexpr (Solid) {
+        auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::NativeSolid>(
+            BRepClass3d_ImplicitCylinder::BuildNativeSolid(*geometry, settings));
+        Object capsule(PyCapsule_New(owned.get(), cylinderSolidName, destroyCylinderSolid));
+        if (!capsule) {
+            return nullptr;
+        }
+        const auto* value = owned.release();
+        Object result(cylinderSolidReport(*value));
+        if (!result || !set(result.get(), "solid_handle", capsule.release())) {
+            return nullptr;
+        }
+        return result.release();
+    }
+    return cylinderVolumeReport(BRepClass3d_ImplicitCylinder::BoundMaterialVolume(*geometry, settings));
+}
+
+PyObject* inspectCylinderSolid(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderSolidName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned native cylinder-solid handle");
+        return nullptr;
+    }
+    return cylinderSolidReport(*static_cast<const BRepClass3d_ImplicitCylinder::NativeSolid*>(
+        PyCapsule_GetPointer(object, cylinderSolidName)));
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -3300,6 +3393,12 @@ PyMethodDef methods[] = {
      "Inspect an owned native cylinder geometry result without rebuilding."},
     {"classify_cylinder_material", checked<classifyCylinderMaterial>, METH_VARARGS,
      "Classify an owned cylinder material recipe with model-length distance bounds."},
+    {"bound_cylinder_material_volume", checked<cylinderMaterialVolume<false>>, METH_VARARGS,
+     "Bound mathematical material volume by adaptive disk/fibre integration."},
+    {"build_cylinder_solid", checked<cylinderMaterialVolume<true>>, METH_VARARGS,
+     "Construct an actual native solid from qualified geometry and bounded material volume."},
+    {"inspect_cylinder_solid", checked<inspectCylinderSolid>, METH_VARARGS,
+     "Inspect an owned native cylinder solid without rebuilding."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,

@@ -55,6 +55,8 @@ from _ImplicitOCCT import inspect_cylinder_shell_tolerance as _inspect_cylinder_
 from _ImplicitOCCT import check_cylinder_shell_geometry as _check_cylinder_shell_geometry
 from _ImplicitOCCT import inspect_cylinder_shell_geometry as _inspect_cylinder_shell_geometry
 from _ImplicitOCCT import classify_cylinder_material as _classify_cylinder_material
+from _ImplicitOCCT import bound_cylinder_material_volume as _bound_cylinder_material_volume
+from _ImplicitOCCT import build_cylinder_solid as _build_cylinder_solid, inspect_cylinder_solid as _inspect_cylinder_solid
 
 
 def _decode_cylinder_caps(result):
@@ -210,8 +212,47 @@ def classify_cylinder_material(geometry_handle, point, point_tolerance=1.e-7):
     boundary_allowance_separated distinguishes clearance beyond the retained
     boundary approximation allowance. This does not invoke an OCCT solid
     classifier or qualify generic consumers. UNKNOWN is a supported result.
+    Qualified native cylinder solid handles are also accepted.
     """
     return _classify_cylinder_material(geometry_handle, point, point_tolerance)
+
+
+def _cylinder_volume_limits(maximum_depth, maximum_cells, maximum_root_tests):
+    for value, maximum, minimum, label in (
+        (maximum_depth, 32, 0, "maximum_depth"),
+        (maximum_cells, 2000000, 1, "maximum_cells"),
+        (maximum_root_tests, 50000000, 1, "maximum_root_tests"),
+    ):
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(f"{label} must be an integer from {minimum} to {maximum}")
+
+
+def bound_cylinder_material_volume(geometry_handle, volume_tolerance=.01, maximum_depth=24,
+                                     maximum_cells=200000, maximum_root_tests=10000000):
+    """Conservative mathematical material volume interval, in model length cubed.
+
+    Reuses qualified geometry/solid owners. This is not generic BRep mass-property
+    evaluation; the absolute interval width is independent of trim tolerance.
+    """
+    _cylinder_volume_limits(maximum_depth, maximum_cells, maximum_root_tests)
+    return _bound_cylinder_material_volume(geometry_handle, volume_tolerance, maximum_depth,
+        maximum_cells, maximum_root_tests)
+
+
+def build_cylinder_solid(geometry_handle, volume_tolerance=.01, maximum_depth=24,
+                           maximum_cells=200000, maximum_root_tests=10000000):
+    """Actual owned native solid after topology, geometry and volume gates.
+
+    Validity is the implicit-aware core contract. Generic OCCT operations,
+    combined graph persistence and live GUI workflows remain unsupported here.
+    """
+    _cylinder_volume_limits(maximum_depth, maximum_cells, maximum_root_tests)
+    return _decode_cylinder_sides(_build_cylinder_solid(geometry_handle, volume_tolerance, maximum_depth,
+        maximum_cells, maximum_root_tests))
+
+
+def inspect_cylinder_solid(handle):
+    return _decode_cylinder_sides(_inspect_cylinder_solid(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,
