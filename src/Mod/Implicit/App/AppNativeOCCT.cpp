@@ -47,6 +47,14 @@ constexpr const char* shellsName = "ImplicitOCCT.NativeShells.v1";
 constexpr const char* solidsName = "ImplicitOCCT.NativeSolids.v1";
 constexpr const char* cylinderCapsName = "ImplicitOCCT.CylinderCaps.v1";
 constexpr const char* cylinderSidesName = "ImplicitOCCT.CylinderSides.v1";
+constexpr const char* cylinderFacesName = "ImplicitOCCT.CylinderFaces.v1";
+
+void destroyCylinderFaces(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, cylinderFacesName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinder::NativeFaces*>(PyCapsule_GetPointer(capsule, cylinderFacesName));
+    }
+}
 
 void destroyCylinderSides(PyObject* capsule)
 {
@@ -1315,7 +1323,32 @@ PyObject* cylinderSidesReport(const BRepClass3d_ImplicitCylinder::Sides& value)
     return result.release();
 }
 
-template<bool Side = false>
+PyObject* cylinderFacesReport(const BRepClass3d_ImplicitCylinder::NativeFaces& value)
+{
+    Object result(cylinderSidesReport(value.Reference.Source.Boundary.Source));
+    Object faces(PyList_New(0));
+    if (!result || !faces) {
+        return nullptr;
+    }
+    for (const auto& face : value.Faces) {
+        Object handle(ownFace(face));
+        if (!handle || PyList_Append(faces.get(), handle.get()) < 0) {
+            return nullptr;
+        }
+    }
+    if (!set(result.get(), "implicit_faces", faces.release())
+        || !set(result.get(), "implicit_faces_attached", PyBool_FromLong(value.FacesAttached))
+        || !set(result.get(), "projected_proxy_topology_validated", PyBool_FromLong(value.Reference.ProxyTopologyValidated))
+        || !set(result.get(), "mathematical_correspondence_verified", PyBool_FromLong(value.Reference.MathematicalCorrespondenceVerified))
+        || !set(result.get(), "attachment_reason", PyUnicode_FromString(value.Reason.c_str()))
+        || !set(result.get(), "axial_direction", PyLong_FromLong(value.Reference.Source.Direction))
+        || !set(result.get(), "axial_derivative_lower_bound", PyFloat_FromDouble(value.Reference.Source.DerivativeLowerBound))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+template<int Mode = 0>
 PyObject* buildCylinderCaps(PyObject* args)
 {
     PyObject *object, *origin, *axis, *direction, *negative = Py_True;
@@ -1342,7 +1375,21 @@ PyObject* buildCylinderCaps(PyObject* args)
     catch (const Standard_ConstructionError&) {
         throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
     }
-    if constexpr (Side) {
+    if constexpr (Mode == 2) {
+        auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::NativeFaces>(
+            BRepClass3d_ImplicitCylinder::BuildImplicitFaces(*face, s, negative == Py_True, nesting));
+        Object capsule(PyCapsule_New(owned.get(), cylinderFacesName, destroyCylinderFaces));
+        if (!capsule) {
+            return nullptr;
+        }
+        const auto* value = owned.release();
+        Object result(cylinderFacesReport(*value));
+        if (!result || !set(result.get(), "faces_handle", capsule.release())) {
+            return nullptr;
+        }
+        return result.release();
+    }
+    if constexpr (Mode == 1) {
         auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::Sides>(
             BRepClass3d_ImplicitCylinder::BuildSides(*face, s, negative == Py_True, nesting));
         Object capsule(PyCapsule_New(owned.get(), cylinderSidesName, destroyCylinderSides));
@@ -1396,6 +1443,20 @@ PyObject* inspectCylinderSides(PyObject* args)
     }
     return cylinderSidesReport(*static_cast<const BRepClass3d_ImplicitCylinder::Sides*>(
         PyCapsule_GetPointer(object, cylinderSidesName)));
+}
+
+PyObject* inspectCylinderFaces(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderFacesName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned native cylinder implicit-face handle");
+        return nullptr;
+    }
+    return cylinderFacesReport(*static_cast<const BRepClass3d_ImplicitCylinder::NativeFaces*>(
+        PyCapsule_GetPointer(object, cylinderFacesName)));
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -3042,6 +3103,10 @@ PyMethodDef methods[] = {
      "Build retained conventional cylinder-side regions; no solid qualification."},
     {"inspect_cylinder_sides", checked<inspectCylinderSides>, METH_VARARGS,
      "Inspect an owned cylinder-side snapshot without retracing."},
+    {"build_cylinder_implicit_faces", checked<buildCylinderCaps<2>>, METH_VARARGS,
+     "Attach native implicit faces for qualified full-disk axial sheets; no solid proof."},
+    {"inspect_cylinder_implicit_faces", checked<inspectCylinderFaces>, METH_VARARGS,
+     "Inspect an owned cylinder implicit-face snapshot without rebuilding."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,

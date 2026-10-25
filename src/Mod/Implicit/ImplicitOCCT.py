@@ -47,6 +47,8 @@ from _ImplicitOCCT import restrict_cylinder_local as _restrict_cylinder_local
 from _ImplicitOCCT import trace_gyroid_cylinder_disks as _trace_gyroid_cylinder_disks
 from _ImplicitOCCT import build_cylinder_caps as _build_cylinder_caps, inspect_cylinder_caps as _inspect_cylinder_caps
 from _ImplicitOCCT import build_cylinder_sides as _build_cylinder_sides, inspect_cylinder_sides as _inspect_cylinder_sides
+from _ImplicitOCCT import build_cylinder_implicit_faces as _build_cylinder_implicit_faces
+from _ImplicitOCCT import inspect_cylinder_implicit_faces as _inspect_cylinder_implicit_faces
 
 
 def _decode_cylinder_caps(result):
@@ -111,6 +113,28 @@ def build_cylinder_sides(face, origin, axis, x_direction, radius, angle_bounds, 
 
 def inspect_cylinder_sides(handle):
     return _decode_cylinder_sides(_inspect_cylinder_sides(handle))
+
+
+def build_cylinder_implicit_faces(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                                  distance_tolerance=.1, maximum_cells=512, negative=True,
+                                  maximum_nesting_tests=2000000):
+    """Native cylinder-restricted implicit faces for qualified full-disk sheets.
+
+    implicit_faces contains immutable native handles, not Part.Shape objects.
+    Partial/folded/unproved sheets refuse attachment. Axial and endpoint covers
+    use fixed defaults of 24 binary split levels and 200000 cells per stage.
+    No shell/solid or combined graph persistence is qualified by this API.
+    """
+    if type(negative) is not bool:
+        raise TypeError("negative must be an explicit bool")
+    if type(maximum_nesting_tests) is not int or not 1 <= maximum_nesting_tests <= 10000000:
+        raise ValueError("maximum_nesting_tests must be an integer from 1 to 10000000")
+    return _decode_cylinder_sides(_build_cylinder_implicit_faces(face, origin, axis, x_direction, radius,
+        angle_bounds, height_bounds, distance_tolerance, maximum_cells, negative, maximum_nesting_tests))
+
+
+def inspect_cylinder_implicit_faces(handle):
+    return _decode_cylinder_sides(_inspect_cylinder_implicit_faces(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,
