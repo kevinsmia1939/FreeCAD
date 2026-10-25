@@ -49,6 +49,7 @@ from _ImplicitOCCT import build_cylinder_caps as _build_cylinder_caps, inspect_c
 from _ImplicitOCCT import build_cylinder_sides as _build_cylinder_sides, inspect_cylinder_sides as _inspect_cylinder_sides
 from _ImplicitOCCT import build_cylinder_implicit_faces as _build_cylinder_implicit_faces
 from _ImplicitOCCT import inspect_cylinder_implicit_faces as _inspect_cylinder_implicit_faces
+from _ImplicitOCCT import build_cylinder_shell as _build_cylinder_shell, inspect_cylinder_shell as _inspect_cylinder_shell
 
 
 def _decode_cylinder_caps(result):
@@ -135,6 +136,26 @@ def build_cylinder_implicit_faces(face, origin, axis, x_direction, radius, angle
 
 def inspect_cylinder_implicit_faces(handle):
     return _decode_cylinder_sides(_inspect_cylinder_implicit_faces(handle))
+
+
+def build_cylinder_shell(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                          distance_tolerance=.1, maximum_cells=512, negative=True,
+                          maximum_nesting_tests=2000000):
+    """Owned closed native shell for qualified full-disk sheets; topology only.
+
+    The shell handle preserves shared native topology. Side/cap previews remain
+    detached Part faces. Shell geometry and solid validation remain false.
+    """
+    if type(negative) is not bool:
+        raise TypeError("negative must be an explicit bool")
+    if type(maximum_nesting_tests) is not int or not 1 <= maximum_nesting_tests <= 10000000:
+        raise ValueError("maximum_nesting_tests must be an integer from 1 to 10000000")
+    return _decode_cylinder_sides(_build_cylinder_shell(face, origin, axis, x_direction, radius,
+        angle_bounds, height_bounds, distance_tolerance, maximum_cells, negative, maximum_nesting_tests))
+
+
+def inspect_cylinder_shell(handle):
+    return _decode_cylinder_sides(_inspect_cylinder_shell(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,

@@ -48,6 +48,14 @@ constexpr const char* solidsName = "ImplicitOCCT.NativeSolids.v1";
 constexpr const char* cylinderCapsName = "ImplicitOCCT.CylinderCaps.v1";
 constexpr const char* cylinderSidesName = "ImplicitOCCT.CylinderSides.v1";
 constexpr const char* cylinderFacesName = "ImplicitOCCT.CylinderFaces.v1";
+constexpr const char* cylinderShellName = "ImplicitOCCT.CylinderShell.v1";
+
+void destroyCylinderShell(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, cylinderShellName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinder::NativeShell*>(PyCapsule_GetPointer(capsule, cylinderShellName));
+    }
+}
 
 void destroyCylinderFaces(PyObject* capsule)
 {
@@ -1348,6 +1356,23 @@ PyObject* cylinderFacesReport(const BRepClass3d_ImplicitCylinder::NativeFaces& v
     return result.release();
 }
 
+PyObject* cylinderShellReport(const BRepClass3d_ImplicitCylinder::NativeShell& value)
+{
+    Object result(cylinderFacesReport(value.Source));
+    if (!result
+        || !set(result.get(), "shell_topology_validated", PyBool_FromLong(value.TopologyValidated))
+        || !set(result.get(), "shell_closed", PyBool_FromLong(!value.Shell.IsNull() && value.Shell.Closed()))
+        || !set(result.get(), "shell_geometry_validated", PyBool_FromLong(false))
+        || !set(result.get(), "shell_reason", PyUnicode_FromString(value.Reason.c_str()))
+        || !set(result.get(), "shell_euler", PyLong_FromLong(value.Euler))
+        || !set(result.get(), "shell_faces", PyLong_FromSize_t(value.Faces.size()))
+        || !set(result.get(), "shell_edges", PyLong_FromSize_t(value.Edges))
+        || !set(result.get(), "shell_vertices", PyLong_FromSize_t(value.Vertices))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
 template<int Mode = 0>
 PyObject* buildCylinderCaps(PyObject* args)
 {
@@ -1374,6 +1399,20 @@ PyObject* buildCylinderCaps(PyObject* args)
     }
     catch (const Standard_ConstructionError&) {
         throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
+    }
+    if constexpr (Mode == 3) {
+        auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::NativeShell>(
+            BRepClass3d_ImplicitCylinder::BuildNativeShell(*face, s, negative == Py_True, nesting));
+        Object capsule(PyCapsule_New(owned.get(), cylinderShellName, destroyCylinderShell));
+        if (!capsule) {
+            return nullptr;
+        }
+        const auto* value = owned.release();
+        Object result(cylinderShellReport(*value));
+        if (!result || !set(result.get(), "shell_handle", capsule.release())) {
+            return nullptr;
+        }
+        return result.release();
     }
     if constexpr (Mode == 2) {
         auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::NativeFaces>(
@@ -1457,6 +1496,20 @@ PyObject* inspectCylinderFaces(PyObject* args)
     }
     return cylinderFacesReport(*static_cast<const BRepClass3d_ImplicitCylinder::NativeFaces*>(
         PyCapsule_GetPointer(object, cylinderFacesName)));
+}
+
+PyObject* inspectCylinderShell(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderShellName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned native cylinder-shell handle");
+        return nullptr;
+    }
+    return cylinderShellReport(*static_cast<const BRepClass3d_ImplicitCylinder::NativeShell*>(
+        PyCapsule_GetPointer(object, cylinderShellName)));
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -3107,6 +3160,10 @@ PyMethodDef methods[] = {
      "Attach native implicit faces for qualified full-disk axial sheets; no solid proof."},
     {"inspect_cylinder_implicit_faces", checked<inspectCylinderFaces>, METH_VARARGS,
      "Inspect an owned cylinder implicit-face snapshot without rebuilding."},
+    {"build_cylinder_shell", checked<buildCylinderCaps<3>>, METH_VARARGS,
+     "Construct a native full-disk cylinder shell with topology checks; no solid proof."},
+    {"inspect_cylinder_shell", checked<inspectCylinderShell>, METH_VARARGS,
+     "Inspect an owned native cylinder shell without rebuilding."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
