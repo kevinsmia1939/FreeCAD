@@ -45,6 +45,40 @@ from _ImplicitOCCT import trace_gyroid_cylinder_boundary as _trace_gyroid_cylind
 from _ImplicitOCCT import build_gyroid_cylinder_rings as _build_gyroid_cylinder_rings
 from _ImplicitOCCT import restrict_cylinder_local as _restrict_cylinder_local
 from _ImplicitOCCT import trace_gyroid_cylinder_disks as _trace_gyroid_cylinder_disks
+from _ImplicitOCCT import build_cylinder_caps as _build_cylinder_caps, inspect_cylinder_caps as _inspect_cylinder_caps
+
+
+def _decode_cylinder_caps(result):
+    result["caps"] = []
+    for records in result.pop("caps_brep"):
+        faces = []
+        for record in records:
+            face = Part.Shape()
+            face.importBrepFromString(record)
+            faces.append(face.Faces[0])
+        result["caps"].append(faces)
+    return result
+
+
+def build_cylinder_caps(face, origin, axis, x_direction, radius, angle_bounds, height_bounds,
+                        distance_tolerance=.1, maximum_cells=512, negative=True,
+                        maximum_nesting_tests=2000000):
+    """Actual planar cap regions, with retained source field/shared native topology.
+
+    caps_handle owns the complete graph; caps contains independent conventional
+    face previews. Cap topology and contour bounds are separate from solid proof.
+    cap_areas use adaptive integration for the many-knot bounded seam curves.
+    """
+    if type(negative) is not bool:
+        raise TypeError("negative must be an explicit bool")
+    if type(maximum_nesting_tests) is not int or not 1 <= maximum_nesting_tests <= 10000000:
+        raise ValueError("maximum_nesting_tests must be an integer from 1 to 10000000")
+    return _decode_cylinder_caps(_build_cylinder_caps(face, origin, axis, x_direction, radius,
+        angle_bounds, height_bounds, distance_tolerance, maximum_cells, negative, maximum_nesting_tests))
+
+
+def inspect_cylinder_caps(handle):
+    return _decode_cylinder_caps(_inspect_cylinder_caps(handle))
 
 
 def trace_gyroid_cylinder_disks(face, origin, axis, x_direction, radius, angle_bounds,

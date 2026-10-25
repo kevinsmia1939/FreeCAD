@@ -10,6 +10,9 @@
 #include <BRep_ImplicitCylinderSection.hxx>
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
+#include <BRepClass3d_ImplicitCylinder.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
 #include <BRepClass3d_ImplicitSolidIO.hxx>
 #include <BRepMesh_ImplicitBoundary.hxx>
@@ -42,6 +45,14 @@ constexpr const char* faceName = "ImplicitOCCT.NativeFace.v1";
 constexpr const char* boundaryName = "ImplicitOCCT.HybridBoundary.v1";
 constexpr const char* shellsName = "ImplicitOCCT.NativeShells.v1";
 constexpr const char* solidsName = "ImplicitOCCT.NativeSolids.v1";
+constexpr const char* cylinderCapsName = "ImplicitOCCT.CylinderCaps.v1";
+
+void destroyCylinderCaps(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, cylinderCapsName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinder::Caps*>(PyCapsule_GetPointer(capsule, cylinderCapsName));
+    }
+}
 
 void destroySolids(PyObject* capsule)
 {
@@ -1199,6 +1210,122 @@ PyObject* checkMixedCoverage(PyObject* args)
 }
 
 PyObject* sectionResult(const BRep_ImplicitPlaneSection::Result& section, bool lattice);
+
+PyObject* cylinderCapsReport(const BRepClass3d_ImplicitCylinder::Caps& value)
+{
+    Object result(Py_BuildValue("{s:O,s:O,s:O,s:O,s:d,s:s,s:K}",
+        "cap_topology_validated", value.TopologyValidated ? Py_True : Py_False,
+        "contour_bound_verified", value.Source.Disks.Verified ? Py_True : Py_False,
+        "solid_validated", Py_False, "negative", value.Negative ? Py_True : Py_False,
+        "contour_bound", value.ContourBound, "reason", value.Reason.c_str(),
+        "maximum_nesting_tests", static_cast<unsigned long long>(value.MaximumNestingTests)));
+    Object caps(PyList_New(0)), areas(PyList_New(0)), errors(PyList_New(0));
+    if (!result || !caps || !areas || !errors) {
+        return nullptr;
+    }
+    std::ostringstream fieldRecord;
+    BRep_ImplicitIO::Write(value.Field, fieldRecord);
+    if (!set(result.get(), "field_record", PyUnicode_FromString(fieldRecord.str().c_str()))) {
+        return nullptr;
+    }
+    const auto& p = value.Parameters;
+    const auto& origin = p.Frame.Location();
+    const auto& axis = p.Frame.Direction();
+    const auto& x = p.Frame.XDirection();
+    if (!set(result.get(), "input_settings", Py_BuildValue("((ddd)(ddd)(ddd)d(dd)(dd)diiOK)",
+        origin.X(), origin.Y(), origin.Z(), axis.X(), axis.Y(), axis.Z(), x.X(), x.Y(), x.Z(),
+        p.Radius, p.AngleMinimum, p.AngleMaximum, p.HeightMinimum, p.HeightMaximum,
+        p.DistanceTolerance, p.MinimumCells, p.MaximumCells, value.Negative ? Py_True : Py_False,
+        static_cast<unsigned long long>(value.MaximumNestingTests)))) {
+        return nullptr;
+    }
+    for (int cap = 0; cap < 2; ++cap) {
+        Object faces(PyList_New(0));
+        double area = 0, error = 0;
+        if (!faces) {
+            return nullptr;
+        }
+        for (const auto& face : value.Faces[cap]) {
+            std::ostringstream output;
+            BRepTools::Write(face, output);
+            const auto record = output.str();
+            Object serialized(PyUnicode_FromStringAndSize(record.data(), record.size()));
+            GProp_GProps properties;
+            error = std::max(error, BRepGProp::SurfaceProperties(face, properties, 1.e-10));
+            area += properties.Mass();
+            if (!serialized || PyList_Append(faces.get(), serialized.get()) < 0) {
+                return nullptr;
+            }
+        }
+        Object mass(PyFloat_FromDouble(area)), estimate(PyFloat_FromDouble(error));
+        if (!mass || !estimate || PyList_Append(caps.get(), faces.get()) < 0
+            || PyList_Append(areas.get(), mass.get()) < 0 || PyList_Append(errors.get(), estimate.get()) < 0) {
+            return nullptr;
+        }
+    }
+    if (!set(result.get(), "caps_brep", caps.release()) || !set(result.get(), "cap_areas", areas.release())
+        || !set(result.get(), "area_error_estimates", errors.release())
+        || !set(result.get(), "field_edge_counts", Py_BuildValue("(KK)",
+            static_cast<unsigned long long>(value.FieldEdges[0].size()),
+            static_cast<unsigned long long>(value.FieldEdges[1].size())))) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+PyObject* buildCylinderCaps(PyObject* args)
+{
+    PyObject *object, *origin, *axis, *direction, *negative = Py_True;
+    unsigned long long nesting = 2000000;
+    BRep_ImplicitCylinderSection::Settings s;
+    gp_Pnt p, n, x;
+    if (!PyArg_ParseTuple(args, "OOOOd(dd)(dd)|diOK", &object, &origin, &axis, &direction,
+        &s.Radius, &s.AngleMinimum, &s.AngleMaximum, &s.HeightMinimum, &s.HeightMaximum,
+        &s.DistanceTolerance, &s.MaximumCells, &negative, &nesting)
+        || !point(origin, p) || !point(axis, n) || !point(direction, x)) {
+        return nullptr;
+    }
+    if (!PyBool_Check(negative)) {
+        PyErr_SetString(PyExc_TypeError, "negative must be an explicit bool");
+        return nullptr;
+    }
+    const auto* face = getFace(object);
+    if (!face) {
+        return nullptr;
+    }
+    try {
+        s.Frame = gp_Ax2(p, gp_Dir(gp_Vec(n.XYZ())), gp_Dir(gp_Vec(x.XYZ())));
+    }
+    catch (const Standard_ConstructionError&) {
+        throw Standard_DomainError("Cylinder axis and X direction must define a nondegenerate frame");
+    }
+    auto owned = std::make_unique<BRepClass3d_ImplicitCylinder::Caps>(
+        BRepClass3d_ImplicitCylinder::BuildCaps(*face, s, negative == Py_True, nesting));
+    Object capsule(PyCapsule_New(owned.get(), cylinderCapsName, destroyCylinderCaps));
+    if (!capsule) {
+        return nullptr;
+    }
+    const auto* value = owned.release();
+    Object result(cylinderCapsReport(*value));
+    if (!result || !set(result.get(), "caps_handle", capsule.release())) {
+        return nullptr;
+    }
+    return result.release();
+}
+
+PyObject* inspectCylinderCaps(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) {
+        return nullptr;
+    }
+    if (!PyCapsule_IsValid(object, cylinderCapsName)) {
+        PyErr_SetString(PyExc_TypeError, "expected an owned native cylinder-cap handle");
+        return nullptr;
+    }
+    return cylinderCapsReport(*static_cast<const BRepClass3d_ImplicitCylinder::Caps*>(
+        PyCapsule_GetPointer(object, cylinderCapsName)));
+}
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
 PyObject* traceGyroidCylinder(PyObject* args)
@@ -2840,6 +2967,10 @@ PyMethodDef methods[] = {
      "check_mixed_regularity(boundary_handle, maximum_depth=14, maximum_cells=2000000) -> "
      "mesh-independent whole-box volume/face/edge/corner regularity. Floating reserves, "
      "NOT stored trim correspondence or solid validation."},
+    {"build_cylinder_caps", checked<buildCylinderCaps>, METH_VARARGS,
+     "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
+    {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
+     "Inspect an owned native cylinder-cap snapshot without rebuilding geometry."},
     {"trace_gyroid_cylinder_disks", checked<traceGyroidCylinder<true, true, false, true>>, METH_VARARGS,
      "Trace disk contours with accepted cells/shared circle roots; not cap regions or solids."},
     {"build_gyroid_cylinder_rings", checked<traceGyroidCylinder<true, true, true>>, METH_VARARGS,
