@@ -1810,7 +1810,7 @@ PyObject* loadCylinderSolid(PyObject* args)
     return result.release();
 }
 
-template<bool PrimitiveSeam, bool Masked = false>
+template<int Mode>
 PyObject* checkStoredCylinderCurves(PyObject* args)
 {
     PyObject* object;
@@ -1826,17 +1826,19 @@ PyObject* checkStoredCylinderCurves(PyObject* args)
     }
     const auto& stored = *static_cast<const BRepClass3d_ImplicitCylinderIO::StoredSolid*>(
         PyCapsule_GetPointer(object, storedCylinderName));
-    const auto report = Masked ? BRepClass3d_ImplicitCylinderIO::CheckMaskedSeam(stored, maximumIntervals)
-        : PrimitiveSeam
+    const auto report = Mode == 3 ? BRepClass3d_ImplicitCylinderIO::CheckSeamCoverage(stored, maximumIntervals)
+        : Mode == 2 ? BRepClass3d_ImplicitCylinderIO::CheckMaskedSeam(stored, maximumIntervals)
+        : Mode == 1
         ? BRepClass3d_ImplicitCylinderIO::CheckPrimitiveSeam(stored, maximumIntervals)
         : BRepClass3d_ImplicitCylinderIO::CheckCurveCoherence(stored, maximumIntervals);
-    return Py_BuildValue("{s:O,s:d,s:K,s:s}",
-        Masked ? "masked_seam_verified" : PrimitiveSeam ? "primitive_seam_verified" : "curve_coherence_verified",
-        report.Verified ? Py_True : Py_False,
-        Masked ? "masked_seam_bound" : PrimitiveSeam ? "primitive_seam_bound" : "curve_coherence_bound", report.Bound,
-        Masked ? "masked_seam_intervals" : PrimitiveSeam ? "primitive_seam_intervals" : "curve_coherence_intervals",
-        static_cast<unsigned long long>(report.Intervals),
-        Masked ? "masked_seam_reason" : PrimitiveSeam ? "primitive_seam_reason" : "curve_coherence_reason", report.Reason.c_str());
+    const std::string prefix = Mode == 3 ? "seam_coverage" : Mode == 2 ? "masked_seam"
+        : Mode == 1 ? "primitive_seam" : "curve_coherence";
+    Object result(PyDict_New());
+    if (!result || !set(result.get(), (prefix+"_verified").c_str(), PyBool_FromLong(report.Verified))
+        || !set(result.get(), (prefix+"_bound").c_str(), PyFloat_FromDouble(report.Bound))
+        || !set(result.get(), (prefix+"_intervals").c_str(), PyLong_FromSize_t(report.Intervals))
+        || !set(result.get(), (prefix+"_reason").c_str(), PyUnicode_FromString(report.Reason.c_str()))) return nullptr;
+    return result.release();
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -3513,12 +3515,14 @@ PyMethodDef methods[] = {
      "Restore a shared cylinder graph; geometry and volume require revalidation."},
     {"inspect_stored_cylinder_solid", checked<inspectStoredCylinder>, METH_VARARGS,
      "Inspect restored topology without promoting numerical certificates."},
-    {"check_stored_cylinder_curves", checked<checkStoredCylinderCurves<false>>, METH_VARARGS,
+    {"check_stored_cylinder_curves", checked<checkStoredCylinderCurves<0>>, METH_VARARGS,
      "Bound stored 3D/p-curve consistency without promoting field or solid certificates."},
-    {"check_stored_cylinder_primitive_seam", checked<checkStoredCylinderCurves<true>>, METH_VARARGS,
+    {"check_stored_cylinder_primitive_seam", checked<checkStoredCylinderCurves<1>>, METH_VARARGS,
      "Bound stored seam distance to unrestricted primitive zeros; masked correspondence remains separate."},
-    {"check_stored_cylinder_masked_seam", checked<checkStoredCylinderCurves<true, true>>, METH_VARARGS,
+    {"check_stored_cylinder_masked_seam", checked<checkStoredCylinderCurves<2>>, METH_VARARGS,
      "Bound directed seam distance with zero witnesses in the convex cylinder/source mask."},
+    {"check_stored_cylinder_seam_coverage", checked<checkStoredCylinderCurves<3>>, METH_VARARGS,
+     "Bound reverse recipe-cylinder intersection coverage by the stored seam without retracing."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,

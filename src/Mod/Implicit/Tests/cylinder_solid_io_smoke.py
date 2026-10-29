@@ -29,6 +29,10 @@ for negative in (True, False):
     masked = native.check_stored_cylinder_masked_seam(handle)
     assert masked["masked_seam_verified"], masked["masked_seam_reason"]
     assert masked["masked_seam_bound"] <= .1
+    coverage = native.check_stored_cylinder_seam_coverage(handle)
+    assert coverage["seam_coverage_verified"], coverage["seam_coverage_reason"]
+    assert coverage["seam_coverage_bound"] <= .1
+    assert not native.check_stored_cylinder_seam_coverage(handle, 1)["seam_coverage_verified"]
     for flag in ("geometry_verified", "volume_verified", "solid_validated",
                  "solid_generic_occt_supported"):
         assert not restored[flag], flag

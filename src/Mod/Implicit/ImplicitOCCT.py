@@ -61,6 +61,7 @@ from _ImplicitOCCT import dumps_cylinder_solid, loads_cylinder_solid, inspect_st
 from _ImplicitOCCT import check_stored_cylinder_curves
 from _ImplicitOCCT import check_stored_cylinder_primitive_seam
 from _ImplicitOCCT import check_stored_cylinder_masked_seam
+from _ImplicitOCCT import check_stored_cylinder_seam_coverage
 
 
 def _decode_cylinder_caps(result):
