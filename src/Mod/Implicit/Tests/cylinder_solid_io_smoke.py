@@ -41,6 +41,16 @@ for negative in (True, False):
     assert side["retained_side_verified"], side["retained_side_reason"]
     assert side["retained_side_bound"] <= .1
     assert not native.check_stored_cylinder_retained_side(handle, 1)["retained_side_verified"]
+    geometry = native.qualify_stored_cylinder_geometry(handle)
+    assert geometry["geometry_verified"], geometry["geometry_reason"]
+    assert geometry["boundary_bound"] <= .1
+    assert not geometry["volume_verified"] and not geometry["solid_validated"]
+    assert not native.inspect_stored_cylinder_solid(handle)["geometry_verified"]
+    geometry["geometry_verified"] = False
+    assert native.inspect_stored_cylinder_geometry(geometry["stored_geometry_handle"])["geometry_verified"]
+    failed = native.qualify_stored_cylinder_geometry(handle, 1)
+    assert not failed["geometry_verified"]
+    assert not native.inspect_stored_cylinder_geometry(failed["stored_geometry_handle"])["geometry_verified"]
     for flag in ("geometry_verified", "volume_verified", "solid_validated",
                  "solid_generic_occt_supported"):
         assert not restored[flag], flag

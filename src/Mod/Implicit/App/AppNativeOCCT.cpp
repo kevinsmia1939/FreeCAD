@@ -54,6 +54,15 @@ constexpr const char* cylinderToleranceName = "ImplicitOCCT.CylinderTolerance.v1
 constexpr const char* cylinderGeometryName = "ImplicitOCCT.CylinderGeometry.v1";
 constexpr const char* cylinderSolidName = "ImplicitOCCT.CylinderSolid.v1";
 constexpr const char* storedCylinderName = "ImplicitOCCT.StoredCylinderSolid.v1";
+constexpr const char* storedCylinderGeometryName = "ImplicitOCCT.StoredCylinderGeometry.v1";
+
+void destroyStoredCylinderGeometry(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, storedCylinderGeometryName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinderIO::Geometry*>(
+            PyCapsule_GetPointer(capsule, storedCylinderGeometryName));
+    }
+}
 
 void destroyStoredCylinder(PyObject* capsule)
 {
@@ -1810,6 +1819,56 @@ PyObject* loadCylinderSolid(PyObject* args)
     return result.release();
 }
 
+PyObject* storedCylinderGeometryReport(const BRepClass3d_ImplicitCylinderIO::Geometry& value)
+{
+    return Py_BuildValue("{s:O,s:O,s:O,s:O,s:d,s:K,s:s,s:O,s:O}",
+        "geometry_verified", value.Verified ? Py_True : Py_False,
+        "volume_verified", Py_False, "solid_validated", Py_False,
+        "solid_generic_occt_supported", Py_False,
+        "boundary_bound", value.Boundary.Bound,
+        "geometry_intervals", static_cast<unsigned long long>(value.Boundary.Intervals),
+        "geometry_reason", value.Boundary.Reason.c_str(),
+        "solid_constructed", value.Source.Shape.IsNull() ? Py_False : Py_True,
+        "negative", value.Source.Negative ? Py_True : Py_False);
+}
+
+PyObject* inspectStoredCylinderGeometry(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) return nullptr;
+    if (!PyCapsule_IsValid(object, storedCylinderGeometryName)) {
+        PyErr_SetString(PyExc_TypeError, "expected a stored cylinder-geometry handle");
+        return nullptr;
+    }
+    return storedCylinderGeometryReport(*static_cast<const BRepClass3d_ImplicitCylinderIO::Geometry*>(
+        PyCapsule_GetPointer(object, storedCylinderGeometryName)));
+}
+
+PyObject* qualifyStoredCylinderGeometry(PyObject* args)
+{
+    PyObject* object;
+    unsigned long long budget = 200000;
+    if (!PyArg_ParseTuple(args, "O|K", &object, &budget)) return nullptr;
+    if (!PyCapsule_IsValid(object, storedCylinderName)) {
+        PyErr_SetString(PyExc_TypeError, "expected a stored cylinder-solid handle");
+        return nullptr;
+    }
+    if (budget == 0 || budget > 2000000) {
+        PyErr_SetString(PyExc_ValueError, "invalid stored geometry interval budget");
+        return nullptr;
+    }
+    const auto& source = *static_cast<const BRepClass3d_ImplicitCylinderIO::StoredSolid*>(
+        PyCapsule_GetPointer(object, storedCylinderName));
+    auto owned = std::make_unique<BRepClass3d_ImplicitCylinderIO::Geometry>(
+        BRepClass3d_ImplicitCylinderIO::CheckGeometry(source, budget));
+    Object capsule(PyCapsule_New(owned.get(), storedCylinderGeometryName, destroyStoredCylinderGeometry));
+    if (!capsule) return nullptr;
+    const auto* value = owned.release();
+    Object result(storedCylinderGeometryReport(*value));
+    if (!result || !set(result.get(), "stored_geometry_handle", capsule.release())) return nullptr;
+    return result.release();
+}
+
 template<int Mode>
 PyObject* checkStoredCylinderCurves(PyObject* args)
 {
@@ -3530,6 +3589,10 @@ PyMethodDef methods[] = {
      "Verify stored full-disk cap geometry, orientation and fresh whole-disk material signs."},
     {"check_stored_cylinder_retained_side", checked<checkStoredCylinderCurves<5>>, METH_VARARGS,
      "Verify stored cylinder frame and complete oriented periodic material region without retracing."},
+    {"qualify_stored_cylinder_geometry", checked<qualifyStoredCylinderGeometry>, METH_VARARGS,
+     "Own freshly verified stored boundary geometry without promoting volume or solid qualification."},
+    {"inspect_stored_cylinder_geometry", checked<inspectStoredCylinderGeometry>, METH_VARARGS,
+     "Inspect an immutable stored-geometry result without rebuilding."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,

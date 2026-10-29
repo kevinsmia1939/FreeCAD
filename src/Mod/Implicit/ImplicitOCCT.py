@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Experimental in-process native faces. Never import the private extension directly.
 
-Opaque immutable snapshots are NOT Part shapes or solids. Primitive records use
+Opaque immutable owners are not Part.Shape objects. Supported factories own
+actual native solids; stored geometry and solid qualification are separate.
+Primitive records use
 explicit versioned OCCT I/O, including box-exclusion and cylinder query masks;
 unsupported trim topology rejects rather than losing geometry. Query residuals
 have field units, ray brackets/model tolerances mm.
@@ -64,6 +66,7 @@ from _ImplicitOCCT import check_stored_cylinder_masked_seam
 from _ImplicitOCCT import check_stored_cylinder_seam_coverage
 from _ImplicitOCCT import check_stored_cylinder_retained_cap
 from _ImplicitOCCT import check_stored_cylinder_retained_side
+from _ImplicitOCCT import qualify_stored_cylinder_geometry, inspect_stored_cylinder_geometry
 
 
 def _decode_cylinder_caps(result):
