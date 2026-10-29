@@ -33,6 +33,10 @@ for negative in (True, False):
     assert coverage["seam_coverage_verified"], coverage["seam_coverage_reason"]
     assert coverage["seam_coverage_bound"] <= .1
     assert not native.check_stored_cylinder_seam_coverage(handle, 1)["seam_coverage_verified"]
+    cap = native.check_stored_cylinder_retained_cap(handle)
+    assert cap["retained_cap_verified"], cap["retained_cap_reason"]
+    assert cap["retained_cap_bound"] <= .1
+    assert not native.check_stored_cylinder_retained_cap(handle, 1)["retained_cap_verified"]
     for flag in ("geometry_verified", "volume_verified", "solid_validated",
                  "solid_generic_occt_supported"):
         assert not restored[flag], flag
