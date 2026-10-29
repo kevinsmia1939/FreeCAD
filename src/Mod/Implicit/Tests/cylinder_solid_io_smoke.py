@@ -18,6 +18,10 @@ for negative in (True, False):
     assert restored["negative"] == negative
     assert restored["field_record"] == native.dumps(source)
     assert restored["requires_revalidation"]
+    coherence = native.check_stored_cylinder_curves(handle)
+    assert coherence["curve_coherence_verified"], coherence["curve_coherence_reason"]
+    assert coherence["curve_coherence_bound"] <= .1
+    assert not native.check_stored_cylinder_curves(handle, 1)["curve_coherence_verified"]
     for flag in ("geometry_verified", "volume_verified", "solid_validated",
                  "solid_generic_occt_supported"):
         assert not restored[flag], flag
