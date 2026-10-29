@@ -11,6 +11,7 @@
 #include <BRep_ImplicitSphereOps.hxx>
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <BRepClass3d_ImplicitCylinder.hxx>
+#include <BRepClass3d_ImplicitCylinderIO.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepClass3d_ImplicitBoxIO.hxx>
@@ -52,6 +53,14 @@ constexpr const char* cylinderShellName = "ImplicitOCCT.CylinderShell.v1";
 constexpr const char* cylinderToleranceName = "ImplicitOCCT.CylinderTolerance.v1";
 constexpr const char* cylinderGeometryName = "ImplicitOCCT.CylinderGeometry.v1";
 constexpr const char* cylinderSolidName = "ImplicitOCCT.CylinderSolid.v1";
+constexpr const char* storedCylinderName = "ImplicitOCCT.StoredCylinderSolid.v1";
+
+void destroyStoredCylinder(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, storedCylinderName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinderIO::StoredSolid*>(PyCapsule_GetPointer(capsule, storedCylinderName));
+    }
+}
 
 void destroyCylinderSolid(PyObject* capsule)
 {
@@ -1731,6 +1740,76 @@ PyObject* inspectCylinderSolid(PyObject* args)
         PyCapsule_GetPointer(object, cylinderSolidName)));
 }
 
+PyObject* dumpCylinderSolid(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) return nullptr;
+    if (!PyCapsule_IsValid(object, cylinderSolidName)) {
+        PyErr_SetString(PyExc_TypeError, "expected a qualified native cylinder-solid handle");
+        return nullptr;
+    }
+    std::ostringstream stream;
+    BRepClass3d_ImplicitCylinderIO::Write(*static_cast<const BRepClass3d_ImplicitCylinder::NativeSolid*>(
+        PyCapsule_GetPointer(object, cylinderSolidName)), stream);
+    const auto text = stream.str();
+    return PyUnicode_FromStringAndSize(text.data(), static_cast<Py_ssize_t>(text.size()));
+}
+
+PyObject* inspectStoredCylinder(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) return nullptr;
+    if (!PyCapsule_IsValid(object, storedCylinderName)) {
+        PyErr_SetString(PyExc_TypeError, "expected a stored cylinder-solid handle");
+        return nullptr;
+    }
+    const auto& value = *static_cast<const BRepClass3d_ImplicitCylinderIO::StoredSolid*>(
+        PyCapsule_GetPointer(object, storedCylinderName));
+    Object result(PyDict_New());
+    std::ostringstream source;
+    BRep_ImplicitIO::Write(value.Primitive, source);
+    if (!result
+        || !set(result.get(), "topology_validated", PyBool_FromLong(value.TopologyValidated))
+        || !set(result.get(), "geometry_verified", PyBool_FromLong(value.GeometryVerified))
+        || !set(result.get(), "volume_verified", PyBool_FromLong(value.VolumeVerified))
+        || !set(result.get(), "solid_validated", PyBool_FromLong(value.SolidValidated))
+        || !set(result.get(), "requires_revalidation", PyBool_FromLong(true))
+        || !set(result.get(), "solid_generic_occt_supported", PyBool_FromLong(false))
+        || !set(result.get(), "solid_constructed", PyBool_FromLong(!value.Shape.IsNull()))
+        || !set(result.get(), "solid_closed", PyBool_FromLong(value.Shape.Closed()))
+        || !set(result.get(), "face_count", PyLong_FromSize_t(value.Faces.size()))
+        || !set(result.get(), "negative", PyBool_FromLong(value.Negative))
+        || !set(result.get(), "field_record", PyUnicode_FromString(source.str().c_str()))
+        || !set(result.get(), "stored_boundary_bound", PyFloat_FromDouble(value.StoredBoundaryBound))
+        || !set(result.get(), "stored_volume_lower", PyFloat_FromDouble(value.StoredVolumeLower))
+        || !set(result.get(), "stored_volume_upper", PyFloat_FromDouble(value.StoredVolumeUpper))) return nullptr;
+    return result.release();
+}
+
+PyObject* loadCylinderSolid(PyObject* args)
+{
+    PyObject* record;
+    Py_ssize_t length;
+    if (!PyArg_ParseTuple(args, "U", &record)) return nullptr;
+    const char* text = PyUnicode_AsUTF8AndSize(record, &length);
+    if (!text) return nullptr;
+    if (length > 16 * 1024 * 1024) {
+        PyErr_SetString(PyExc_ValueError, "cylinder solid record exceeds 16 MiB");
+        return nullptr;
+    }
+    auto owned = std::make_unique<BRepClass3d_ImplicitCylinderIO::StoredSolid>();
+    std::istringstream stream(std::string(text, static_cast<size_t>(length)));
+    BRepClass3d_ImplicitCylinderIO::Read(stream, *owned);
+    Object capsule(PyCapsule_New(owned.get(), storedCylinderName, destroyStoredCylinder));
+    if (!capsule) return nullptr;
+    owned.release();
+    Object tuple(PyTuple_Pack(1, capsule.get()));
+    if (!tuple) return nullptr;
+    Object result(inspectStoredCylinder(tuple.get()));
+    if (!result || !set(result.get(), "stored_solid_handle", capsule.release())) return nullptr;
+    return result.release();
+}
+
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
 PyObject* traceGyroidCylinder(PyObject* args)
 {
@@ -3399,6 +3478,12 @@ PyMethodDef methods[] = {
      "Construct an actual native solid from qualified geometry and bounded material volume."},
     {"inspect_cylinder_solid", checked<inspectCylinderSolid>, METH_VARARGS,
      "Inspect an owned native cylinder solid without rebuilding."},
+    {"dumps_cylinder_solid", checked<dumpCylinderSolid>, METH_VARARGS,
+     "Persist the actual qualified cylinder graph without mesh caches."},
+    {"loads_cylinder_solid", checked<loadCylinderSolid>, METH_VARARGS,
+     "Restore a shared cylinder graph; geometry and volume require revalidation."},
+    {"inspect_stored_cylinder_solid", checked<inspectStoredCylinder>, METH_VARARGS,
+     "Inspect restored topology without promoting numerical certificates."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
