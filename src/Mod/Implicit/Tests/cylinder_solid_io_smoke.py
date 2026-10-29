@@ -22,6 +22,13 @@ for negative in (True, False):
     assert coherence["curve_coherence_verified"], coherence["curve_coherence_reason"]
     assert coherence["curve_coherence_bound"] <= .1
     assert not native.check_stored_cylinder_curves(handle, 1)["curve_coherence_verified"]
+    seam = native.check_stored_cylinder_primitive_seam(handle)
+    assert seam["primitive_seam_verified"], seam["primitive_seam_reason"]
+    assert seam["primitive_seam_bound"] <= .1
+    assert not native.check_stored_cylinder_primitive_seam(handle, 1)["primitive_seam_verified"]
+    masked = native.check_stored_cylinder_masked_seam(handle)
+    assert masked["masked_seam_verified"], masked["masked_seam_reason"]
+    assert masked["masked_seam_bound"] <= .1
     for flag in ("geometry_verified", "volume_verified", "solid_validated",
                  "solid_generic_occt_supported"):
         assert not restored[flag], flag

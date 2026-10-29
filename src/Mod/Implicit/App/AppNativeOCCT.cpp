@@ -1810,6 +1810,7 @@ PyObject* loadCylinderSolid(PyObject* args)
     return result.release();
 }
 
+template<bool PrimitiveSeam, bool Masked = false>
 PyObject* checkStoredCylinderCurves(PyObject* args)
 {
     PyObject* object;
@@ -1825,11 +1826,17 @@ PyObject* checkStoredCylinderCurves(PyObject* args)
     }
     const auto& stored = *static_cast<const BRepClass3d_ImplicitCylinderIO::StoredSolid*>(
         PyCapsule_GetPointer(object, storedCylinderName));
-    const auto report = BRepClass3d_ImplicitCylinderIO::CheckCurveCoherence(stored, maximumIntervals);
-    return Py_BuildValue("{s:O,s:d,s:K,s:s}", "curve_coherence_verified",
-        report.Verified ? Py_True : Py_False, "curve_coherence_bound", report.Bound,
-        "curve_coherence_intervals", static_cast<unsigned long long>(report.Intervals),
-        "curve_coherence_reason", report.Reason.c_str());
+    const auto report = Masked ? BRepClass3d_ImplicitCylinderIO::CheckMaskedSeam(stored, maximumIntervals)
+        : PrimitiveSeam
+        ? BRepClass3d_ImplicitCylinderIO::CheckPrimitiveSeam(stored, maximumIntervals)
+        : BRepClass3d_ImplicitCylinderIO::CheckCurveCoherence(stored, maximumIntervals);
+    return Py_BuildValue("{s:O,s:d,s:K,s:s}",
+        Masked ? "masked_seam_verified" : PrimitiveSeam ? "primitive_seam_verified" : "curve_coherence_verified",
+        report.Verified ? Py_True : Py_False,
+        Masked ? "masked_seam_bound" : PrimitiveSeam ? "primitive_seam_bound" : "curve_coherence_bound", report.Bound,
+        Masked ? "masked_seam_intervals" : PrimitiveSeam ? "primitive_seam_intervals" : "curve_coherence_intervals",
+        static_cast<unsigned long long>(report.Intervals),
+        Masked ? "masked_seam_reason" : PrimitiveSeam ? "primitive_seam_reason" : "curve_coherence_reason", report.Reason.c_str());
 }
 
 template<bool Periodic, bool Boundary = false, bool Rings = false, bool Disks = false>
@@ -3506,8 +3513,12 @@ PyMethodDef methods[] = {
      "Restore a shared cylinder graph; geometry and volume require revalidation."},
     {"inspect_stored_cylinder_solid", checked<inspectStoredCylinder>, METH_VARARGS,
      "Inspect restored topology without promoting numerical certificates."},
-    {"check_stored_cylinder_curves", checked<checkStoredCylinderCurves>, METH_VARARGS,
+    {"check_stored_cylinder_curves", checked<checkStoredCylinderCurves<false>>, METH_VARARGS,
      "Bound stored 3D/p-curve consistency without promoting field or solid certificates."},
+    {"check_stored_cylinder_primitive_seam", checked<checkStoredCylinderCurves<true>>, METH_VARARGS,
+     "Bound stored seam distance to unrestricted primitive zeros; masked correspondence remains separate."},
+    {"check_stored_cylinder_masked_seam", checked<checkStoredCylinderCurves<true, true>>, METH_VARARGS,
+     "Bound directed seam distance with zero witnesses in the convex cylinder/source mask."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,

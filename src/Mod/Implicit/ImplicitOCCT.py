@@ -59,6 +59,8 @@ from _ImplicitOCCT import bound_cylinder_material_volume as _bound_cylinder_mate
 from _ImplicitOCCT import build_cylinder_solid as _build_cylinder_solid, inspect_cylinder_solid as _inspect_cylinder_solid
 from _ImplicitOCCT import dumps_cylinder_solid, loads_cylinder_solid, inspect_stored_cylinder_solid
 from _ImplicitOCCT import check_stored_cylinder_curves
+from _ImplicitOCCT import check_stored_cylinder_primitive_seam
+from _ImplicitOCCT import check_stored_cylinder_masked_seam
 
 
 def _decode_cylinder_caps(result):
