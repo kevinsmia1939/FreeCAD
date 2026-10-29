@@ -1826,13 +1826,15 @@ PyObject* checkStoredCylinderCurves(PyObject* args)
     }
     const auto& stored = *static_cast<const BRepClass3d_ImplicitCylinderIO::StoredSolid*>(
         PyCapsule_GetPointer(object, storedCylinderName));
-    const auto report = Mode == 4 ? BRepClass3d_ImplicitCylinderIO::CheckRetainedCap(stored, maximumIntervals)
+    const auto report = Mode == 5 ? BRepClass3d_ImplicitCylinderIO::CheckRetainedSide(stored, maximumIntervals)
+        : Mode == 4 ? BRepClass3d_ImplicitCylinderIO::CheckRetainedCap(stored, maximumIntervals)
         : Mode == 3 ? BRepClass3d_ImplicitCylinderIO::CheckSeamCoverage(stored, maximumIntervals)
         : Mode == 2 ? BRepClass3d_ImplicitCylinderIO::CheckMaskedSeam(stored, maximumIntervals)
         : Mode == 1
         ? BRepClass3d_ImplicitCylinderIO::CheckPrimitiveSeam(stored, maximumIntervals)
         : BRepClass3d_ImplicitCylinderIO::CheckCurveCoherence(stored, maximumIntervals);
-    const std::string prefix = Mode == 4 ? "retained_cap" : Mode == 3 ? "seam_coverage" : Mode == 2 ? "masked_seam"
+    const std::string prefix = Mode == 5 ? "retained_side" : Mode == 4 ? "retained_cap"
+        : Mode == 3 ? "seam_coverage" : Mode == 2 ? "masked_seam"
         : Mode == 1 ? "primitive_seam" : "curve_coherence";
     Object result(PyDict_New());
     if (!result || !set(result.get(), (prefix+"_verified").c_str(), PyBool_FromLong(report.Verified))
@@ -3526,6 +3528,8 @@ PyMethodDef methods[] = {
      "Bound reverse recipe-cylinder intersection coverage by the stored seam without retracing."},
     {"check_stored_cylinder_retained_cap", checked<checkStoredCylinderCurves<4>>, METH_VARARGS,
      "Verify stored full-disk cap geometry, orientation and fresh whole-disk material signs."},
+    {"check_stored_cylinder_retained_side", checked<checkStoredCylinderCurves<5>>, METH_VARARGS,
+     "Verify stored cylinder frame and complete oriented periodic material region without retracing."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
