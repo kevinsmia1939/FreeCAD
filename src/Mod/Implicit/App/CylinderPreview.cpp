@@ -174,14 +174,29 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         emit(center, cap[i], cap[(i + 1) % cap.size()], 1);
     }
     size_t ci = 0, fi = 0;
+    struct SideChartVertex
+    {
+        uint32_t index;
+        double angle, height;
+    };
+    std::vector<std::array<SideChartVertex, 3>> sideChart;
+    const auto emitSide = [&](SideChartVertex a, SideChartVertex b, SideChartVertex c) {
+        sideChart.push_back({a, b, c});
+        emit(a.index, b.index, c.index, 2);
+    };
     while (ci < cap.size() || fi < sheet.size()) {
         const auto c = cap[ci % cap.size()], f = sheet[fi % sheet.size()];
+        const SideChartVertex capVertex {c, capAngles[ci], capHeight};
+        const SideChartVertex fieldVertex {f, fieldAngles[fi], local(result.points[f]).Z()};
         if (ci < cap.size() && (fi == sheet.size() || capAngles[ci + 1] < fieldAngles[fi + 1])) {
-            emit(c, cap[(ci + 1) % cap.size()], f, 2);
+            emitSide(capVertex,
+                     {cap[(ci + 1) % cap.size()], capAngles[ci + 1], capHeight}, fieldVertex);
             ++ci;
         }
         else {
-            emit(c, sheet[(fi + 1) % sheet.size()], f, 2);
+            const auto next = sheet[(fi + 1) % sheet.size()];
+            emitSide(capVertex,
+                     {next, fieldAngles[fi + 1], local(result.points[next]).Z()}, fieldVertex);
             ++fi;
         }
     }
@@ -483,11 +498,12 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         maximumDisplacement = std::max(maximumDisplacement, displacement);
         maximumResidual = std::max(maximumResidual, residual);
     }
+    double displayAxialLower = axial.DerivativeLowerBound;
     if (result.sheetReverseDistanceVerified) {
         const double numerator = maximumResidual + diskDeficit * field->LipschitzBound() / scale;
         const double remaining = tolerance - maximumDisplacement - diskDeficit - precision;
         const double requested = remaining > 0 ? numerator / remaining : -1.;
-        double lower = axial.DerivativeLowerBound;
+        double& lower = displayAxialLower;
         if (requested >= lower && std::isfinite(requested)) {
             const auto refined = BRepClass3d_ImplicitCylinder::CheckAxialField(
                 primitive, s, 24, 200000, requested);
@@ -506,6 +522,83 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         else if (result.sheetReverseReason.empty()) {
             result.sheetReverseReason = "Reference sheet reverse-distance budget unresolved";
         }
+    }
+    // The zipper triangulates the unwrapped strip between the constant cap
+    // and the piecewise-linear field heights. Its cylinder lift differs from
+    // the uploaded triangles by a vertex perturbation plus circular curvature.
+    const auto seamPoint = local(result.points[capSeam]);
+    const double baseAngle = std::atan2(seamPoint.Y(), seamPoint.X());
+    const double lipschitz = field->LipschitzBound() / scale;
+    bool sideChartValid = true;
+    const auto checkAngles = [&](const std::vector<double>& angles) {
+        bool valid = angles.front() == 0 && angles.back() == turn;
+        for (size_t i = 1; i < angles.size(); ++i) {
+            valid = valid && angles[i] > angles[i - 1]
+                && angles[i] - angles[i - 1] < std::acos(-1.);
+        }
+        return valid;
+    };
+    sideChartValid = checkAngles(capAngles) && checkAngles(fieldAngles);
+    const auto cylinderPoint = [&](double angle, double height) {
+        return world(s.Radius * std::cos(baseAngle + angle),
+                     s.Radius * std::sin(baseAngle + angle), height);
+    };
+    double sideMeshBound = 0, sideBoundaryResidual = 0;
+    for (const auto& triangle : sideChart) {
+        double perturbation = precision, lowAngle = turn, highAngle = 0;
+        for (const auto& vertex : triangle) {
+            const auto reference = cylinderPoint(vertex.angle, vertex.height);
+            perturbation = std::max(perturbation, (uploaded(vertex.index) - reference).Length() + precision);
+            lowAngle = std::min(lowAngle, vertex.angle);
+            highAngle = std::max(highAngle, vertex.angle);
+        }
+        const double span = highAngle - lowAngle + 8 * precision / s.Radius;
+        sideMeshBound = std::max(sideMeshBound, perturbation + s.Radius * span * span / 8 + precision);
+        ++result.sideTrianglesChecked;
+    }
+    for (size_t i = 0; i < sheet.size(); ++i) {
+        const double a = fieldAngles[i], b = fieldAngles[i + 1];
+        const double ha = local(result.points[sheet[i]]).Z();
+        const double hb = local(result.points[sheet[(i + 1) % sheet.size()]]).Z();
+        sideChartValid = sideChartValid && ha >= s.HeightMinimum && ha <= s.HeightMaximum
+            && hb >= s.HeightMinimum && hb <= s.HeightMaximum
+            && (bottom ? std::min(ha, hb) > capHeight + precision
+                       : std::max(ha, hb) < capHeight - precision);
+        const auto pa = cylinderPoint(a, ha), pb = cylinderPoint(b, hb);
+        const double endpoints = std::max(
+            std::abs(BRep_ImplicitTool::Value(primitive, gp_Pnt(pa.x, pa.y, pa.z))),
+            std::abs(BRep_ImplicitTool::Value(primitive, gp_Pnt(pb.x, pb.y, pb.z))));
+        const double span = b - a + 8 * precision / s.Radius;
+        // Along the cylindrical lifted field-height chord, |X''| = R and
+        // |X'|^2 = R^2 + (delta_height / delta_angle)^2.
+        const double residual = endpoints + reserve
+            + (hessian * (s.Radius * s.Radius * span * span + (hb - ha) * (hb - ha))
+               + lipschitz * s.Radius * span * span) / 8;
+        sideBoundaryResidual = std::max(sideBoundaryResidual, residual);
+    }
+    const double sideRemaining = tolerance - sideMeshBound - precision;
+    const double sideRequested = sideRemaining > 0 ? sideBoundaryResidual / sideRemaining : -1.;
+    if (sideChartValid && std::isfinite(sideRequested) && sideRequested >= displayAxialLower) {
+        const auto refined = BRepClass3d_ImplicitCylinder::CheckAxialField(
+            primitive, s, 24, 200000, sideRequested);
+        if (refined.MonotonicityVerified) {
+            displayAxialLower = refined.DerivativeLowerBound;
+        }
+        else {
+            result.sideDistanceReason = refined.Reason;
+        }
+    }
+    // At fixed angle, both strip domains are vertical intervals with the same
+    // cap endpoint. Their Hausdorff distance is bounded by the field-height
+    // endpoint difference; the qualified full-disk sheet supplies the roots.
+    const double sideBound = sideMeshBound + sideBoundaryResidual / displayAxialLower + precision;
+    result.sideDistanceVerified = sideChartValid && sideRequested >= 0
+        && std::isfinite(sideBound) && sideBound <= tolerance;
+    if (result.sideDistanceVerified) {
+        result.sideDistanceBound = sideBound;
+    }
+    else if (result.sideDistanceReason.empty()) {
+        result.sideDistanceReason = "Cylinder side chart or bidirectional distance budget unresolved";
     }
     return result;
 }

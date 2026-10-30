@@ -28,6 +28,10 @@ struct CylinderPreview
     double sheetReverseDistanceBound = 0;
     size_t sheetReverseTrianglesChecked = 0;
     std::string sheetReverseReason;
+    bool sideDistanceVerified = false;
+    double sideDistanceBound = 0;
+    size_t sideTrianglesChecked = 0;
+    std::string sideDistanceReason;
 };
 // Transient conforming preview, not a global surface-distance certificate.
 CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);

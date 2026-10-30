@@ -81,6 +81,9 @@ for negative, tilted in ((False, False), (True, False), (False, True)):
     assert mesh["sheet_reverse_distance_verified"], mesh["sheet_reverse_reason"]
     assert mesh["sheet_reverse_triangles_checked"] == mesh["native_faces"].count(3)
     assert 0 < mesh["sheet_reverse_distance_bound"] <= .1
+    assert mesh["side_distance_verified"], mesh["side_distance_reason"]
+    assert mesh["side_triangles_checked"] == mesh["native_faces"].count(2)
+    assert 0 < mesh["side_distance_bound"] <= .1
     uploaded = [App.Vector(*(struct.unpack('f', struct.pack('f', v))[0] for v in p))
                 for p in mesh["points"]]
     assert mesh["cap_disk_distance_verified"], mesh["cap_disk_reason"]
@@ -112,6 +115,30 @@ for negative, tilted in ((False, False), (True, False), (False, True)):
             point = world(px, py, root_at(px, py))
             distance = min(triangle_distance(point, *tri) for tri in field_triangles)
             assert distance <= mesh["sheet_reverse_distance_bound"], distance
+    side_triangles = [tuple(uploaded[i] for i in tri)
+                      for tri, face in zip(mesh["triangles"], mesh["native_faces"]) if face == 2]
+    # Reverse wall coverage includes both boundaries and the wall interior.
+    for i in range(23):
+        angle = 2*math.pi*(i+.41)/23
+        px, py = .5*math.cos(angle), .5*math.sin(angle)
+        field_height = root_at(px, py)
+        for fraction in (0, .37, 1):
+            height = cap_height+fraction*(field_height-cap_height)
+            point = world(px, py, height)
+            distance = min(triangle_distance(point, *tri) for tri in side_triangles)
+            assert distance <= mesh["side_distance_bound"], distance
+    # Each uploaded triangle interior has an explicit valid wall witness.
+    for tri in side_triangles:
+        for weights in ((1/3, 1/3, 1/3), (.2, .7, .1)):
+            point = sum((p*w for p, w in zip(tri, weights)), App.Vector())
+            delta = point-origin_vector
+            px, py, height = delta.dot(x_vector), delta.dot(y_vector), delta.dot(axis_vector)
+            factor = .5/math.hypot(px, py)
+            px, py = px*factor, py*factor
+            field_height = root_at(px, py)
+            height = max(min(cap_height, field_height), min(max(cap_height, field_height), height))
+            distance = (point-world(px, py, height)).Length
+            assert distance <= mesh["side_distance_bound"], distance
     sampled = 0
     for index, (triangle, face) in enumerate(zip(mesh["triangles"], mesh["native_faces"])):
         if face != 3 or index % 37:
