@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""GUI tree/property lifecycle only; does not claim cylinder surface rendering."""
+"""Transient surface preview, native viewport picks and property lifecycle."""
 import os
 from pathlib import Path
 import runpy

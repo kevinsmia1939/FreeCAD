@@ -2,6 +2,8 @@
 #include "CylinderGeometry.h"
 #include "CylinderBoundary.h"
 #include <TopExp_Explorer.hxx>
+#include <App/ComplexGeoDataPy.h>
+#include <charconv>
 #include <Base/Exception.h>
 #include <Base/Reader.h>
 #include <Base/Writer.h>
@@ -88,6 +90,70 @@ const CylinderSegment& segment(const Data::Segment* value, const std::shared_ptr
     }
     return *selected;
 }
+class CylinderSelectedGeometry final: public Implicit::CylinderGeometry
+{
+    TopoDS_Shape selected;
+
+public:
+    CylinderSelectedGeometry(const Implicit::CylinderGeometry& source, const char* type, unsigned long index)
+    {
+        qualified = source.qualified;
+        std::unique_ptr<Data::Segment> value(source.getSubElement(type, index));
+        selected = segment(value.get(), qualified).shape;
+    }
+    std::vector<const char*> getElementTypes() const override
+    {
+        return {"Element"};
+    }
+    unsigned long countSubElements(const char* type) const override
+    {
+        return !std::strcmp(type, "Element") ? 1 : 0;
+    }
+    Base::BoundBox3d getBoundBox() const override
+    {
+        if (selected.ShapeType() != TopAbs_VERTEX) {
+            return CylinderGeometry::getBoundBox();
+        }
+        const auto p = BRep_Tool::Pnt(TopoDS::Vertex(selected));
+        Base::BoundBox3d box;
+        box.Add(Base::Vector3d(p.X(), p.Y(), p.Z()));
+        return box;
+    }
+    Data::Segment* getSubElement(const char* type, unsigned long index) const override
+    {
+        if (std::strcmp(type, "Element") || index != 1) {
+            throw Base::ValueError("Invalid selected cylinder element");
+        }
+        auto value = std::make_unique<CylinderSegment>();
+        value->owner = qualified;
+        value->shape = selected;
+        value->name = "Element1";
+        return value.release();
+    }
+    void getLines(
+        std::vector<Base::Vector3d>& points,
+        std::vector<Line>& lines,
+        double accuracy,
+        uint16_t
+    ) const override
+    {
+        Implicit::detail::cylinderBoundary(selected, accuracy, points, lines);
+    }
+    void getPoints(
+        std::vector<Base::Vector3d>& points,
+        std::vector<Base::Vector3d>&,
+        double,
+        uint16_t
+    ) const override
+    {
+        Map vertices;
+        TopExp::MapShapes(selected, TopAbs_VERTEX, vertices);
+        for (const auto& vertex : vertices) {
+            const auto p = BRep_Tool::Pnt(TopoDS::Vertex(vertex));
+            points.emplace_back(p.X(), p.Y(), p.Z());
+        }
+    }
+};
 }  // namespace
 
 TYPESYSTEM_SOURCE(Implicit::CylinderGeometry, Data::ComplexGeoData)
@@ -459,5 +525,50 @@ void NativeCylinderFeature::onChanged(const App::Property* property)
         );
     }
     App::GeoFeature::onChanged(property);
+}
+App::DocumentObject* NativeCylinderFeature::getSubObject(
+    const char* name,
+    PyObject** pyObject,
+    Base::Matrix4D* matrix,
+    bool transform,
+    int depth
+) const
+{
+    if (!name || !*name || std::strchr(name, '.')) {
+        return App::GeoFeature::getSubObject(name, pyObject, matrix, transform, depth);
+    }
+    if (!Geometry.ready()) {
+        return nullptr;
+    }
+    const auto* geometry = static_cast<const CylinderGeometry*>(Geometry.getComplexData());
+    for (const auto* type : geometry->getElementTypes()) {
+        const size_t length = std::strlen(type);
+        if (std::strncmp(name, type, length)) {
+            continue;
+        }
+        unsigned long index = 0;
+        const auto parsed = std::from_chars(name + length, name + std::strlen(name), index);
+        if (parsed.ec != std::errc() || *parsed.ptr || !index
+            || index > geometry->countSubElements(type)) {
+            return nullptr;
+        }
+        Base::Matrix4D placed = matrix ? *matrix : Base::Matrix4D();
+        if (transform) {
+            placed *= Placement.getValue().toMatrix();
+        }
+        if (placed != Base::Matrix4D()) {
+            return nullptr;
+        }
+        if (pyObject) {
+            auto selected = std::make_unique<CylinderSelectedGeometry>(*geometry, type, index);
+            *pyObject = new Data::ComplexGeoDataPy(selected.get());
+            selected.release();
+        }
+        if (matrix) {
+            *matrix = placed;
+        }
+        return const_cast<NativeCylinderFeature*>(this);
+    }
+    return nullptr;
 }
 }  // namespace Implicit

@@ -22,7 +22,8 @@ inline void cylinderBoundary(
     const TopoDS_Shape& shape,
     double accuracy,
     std::vector<Base::Vector3d>& output,
-    std::vector<Data::ComplexGeoData::Line>& lines
+    std::vector<Data::ComplexGeoData::Line>& lines,
+    std::vector<std::vector<uint32_t>>* edgeSamples = nullptr
 )
 {
     using Map = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
@@ -34,6 +35,7 @@ inline void cylinderBoundary(
     TopExp::MapShapes(shape, TopAbs_VERTEX, vertices);
     std::vector<Base::Vector3d> points;
     std::vector<Data::ComplexGeoData::Line> segments;
+    std::vector<std::vector<uint32_t>> samples;
     constexpr size_t maximumNodes = 1000000;
     const auto append = [&](const gp_Pnt& p) {
         if (points.size() >= maximumNodes || !std::isfinite(p.X()) || !std::isfinite(p.Y())
@@ -114,12 +116,23 @@ inline void cylinderBoundary(
             throw Base::NotImplementedError("Unsupported cylinder boundary curve");
         }
         uint32_t previous = uint32_t(start - 1);
+        std::vector<uint32_t> sample;
+        if (edgeSamples) {
+            sample.push_back(previous);
+        }
         for (const auto& p : interior) {
             const auto index = append(p);
             segments.push_back({previous, index});
             previous = index;
+            if (edgeSamples) {
+                sample.push_back(index);
+            }
         }
         segments.push_back({previous, uint32_t(finish - 1)});
+        if (edgeSamples) {
+            sample.push_back(uint32_t(finish - 1));
+            samples.push_back(std::move(sample));
+        }
     }
     if (output.size() + points.size() > std::numeric_limits<uint32_t>::max()) {
         throw Base::ValueError("Cylinder line index overflow");
@@ -128,6 +141,14 @@ inline void cylinderBoundary(
     output.insert(output.end(), points.begin(), points.end());
     for (const auto& line : segments) {
         lines.push_back({line.I1 + offset, line.I2 + offset});
+    }
+    if (edgeSamples) {
+        for (auto& sample : samples) {
+            for (auto& index : sample) {
+                index += offset;
+            }
+        }
+        *edgeSamples = std::move(samples);
     }
 }
 }  // namespace Implicit::detail

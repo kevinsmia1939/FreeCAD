@@ -95,6 +95,13 @@ public:
     App::PropertyString GeometryState;
     const App::PropertyComplexGeoData* getPropertyOfGeometry() const override;
     const char* getViewProviderName() const override;
+    App::DocumentObject* getSubObject(
+        const char*,
+        PyObject** = nullptr,
+        Base::Matrix4D* = nullptr,
+        bool = true,
+        int = 0
+    ) const override;
 
 protected:
     void onChanged(const App::Property*) override;

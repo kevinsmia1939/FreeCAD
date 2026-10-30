@@ -15,6 +15,7 @@
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
 # include "NativeGeometry.h"
 # include "CylinderGeometry.h"
+# include "CylinderPreview.h"
 # include <App/ComplexGeoDataPy.h>
 #endif
 
@@ -94,6 +95,8 @@ public:
             &Module::nativeGeometry,
             "nativeGeometry(feature) -> owned native ComplexGeoData snapshot; local coordinates"
         );
+        add_varargs_method("cylinderPreview", &Module::cylinderPreview,
+            "cylinderPreview(feature, resolution=16) -> conforming transient preview; surface distance unverified");
         add_varargs_method(
             "classifyNative",
             &Module::classifyNative,
@@ -286,6 +289,45 @@ private:
             data["witness_bracket_width"] = Py::Float(query.WitnessBracketWidth);
         }
         return data;
+    }
+    Py::Object cylinderPreview(const Py::Tuple& args)
+    {
+        PyObject* object=nullptr;
+        int resolution=16;
+        if (!PyArg_ParseTuple(args.ptr(),"O!|i",&App::DocumentObjectPy::Type,&object,&resolution)) throw Py::Exception();
+        auto* owner=static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
+        auto* property=dynamic_cast<PropertyNativeCylinderGeometry*>(owner->getPropertyByName("Geometry"));
+        if (!property || !property->ready()) throw Py::ValueError("Expected qualified cylinder document geometry");
+        const auto* geometry=static_cast<const CylinderGeometry*>(property->getComplexData());
+        CylinderPreview preview;
+        try { preview=buildCylinderPreview(*geometry->qualified,unsigned(resolution)); }
+        catch (const Base::Exception& error) { throw Py::ValueError(error.what()); }
+        catch (const Standard_Failure& error) { throw Py::RuntimeError(error.what()); }
+        Py::Dict report;
+        Py::List points,triangles,faces,normals,edges;
+        for (const auto& point:preview.points) points.append(vectorToPython(point));
+        for (const auto& normal:preview.cornerNormals) normals.append(vectorToPython(normal));
+        for (const auto& triangle:preview.triangles) {
+            Py::Tuple value(3);
+            for (int i=0;i<3;++i) value[i]=Py::Long(static_cast<unsigned long>(triangle[size_t(i)]));
+            triangles.append(value);
+        }
+        for (auto face:preview.faces) faces.append(Py::Long(static_cast<unsigned long>(face)));
+        for (const auto& edge:preview.edges) {
+            Py::List value; for (auto index:edge) value.append(Py::Long(static_cast<unsigned long>(index))); edges.append(value);
+        }
+        report["points"]=points; report["triangles"]=triangles; report["native_faces"]=faces;
+        report["corner_normals"]=normals; report["native_edges"]=edges;
+        report["native_vertex_count"]=Py::Long(static_cast<unsigned long>(preview.nativeVertices));
+        report["source_geometry_verified"]=Py::Boolean(true);
+        report["mesh_incidence_verified"]=Py::Boolean(true);
+        report["surface_distance_verified"]=Py::Boolean(false);
+        report["curve_deflection"]=Py::Float(preview.curveDeflection);
+        report["root_point_bound"]=Py::Float(preview.rootPointBound);
+        report["upload_bound"]=Py::Float(preview.uploadBound);
+        report["source_boundary_allowance"]=Py::Float(geometry->qualified->Source.Boundary.Bound);
+        report["root_tests"]=Py::Long(preview.rootTests);
+        return report;
     }
     Py::Object nativeGeometry(const Py::Tuple& args)
     {
