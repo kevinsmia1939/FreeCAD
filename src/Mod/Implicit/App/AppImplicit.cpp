@@ -330,6 +330,10 @@ private:
         report["cap_disk_distance_verified"]=Py::Boolean(preview.capDiskDistanceVerified);
         report["cap_disk_distance_bound"]=Py::Float(preview.capDiskDistanceBound);
         report["cap_disk_reason"]=Py::String(preview.capDiskReason);
+        report["sheet_reverse_distance_verified"]=Py::Boolean(preview.sheetReverseDistanceVerified);
+        report["sheet_reverse_distance_bound"]=Py::Float(preview.sheetReverseDistanceBound);
+        report["sheet_reverse_triangles_checked"]=Py::Long(preview.sheetReverseTrianglesChecked);
+        report["sheet_reverse_reason"]=Py::String(preview.sheetReverseReason);
         report["curve_deflection"]=Py::Float(preview.curveDeflection);
         report["root_point_bound"]=Py::Float(preview.rootPointBound);
         report["upload_bound"]=Py::Float(preview.uploadBound);

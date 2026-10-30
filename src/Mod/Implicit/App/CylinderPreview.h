@@ -24,6 +24,10 @@ struct CylinderPreview
     bool capDiskDistanceVerified = false;
     double capDiskDistanceBound = 0;
     std::string capDiskReason;
+    bool sheetReverseDistanceVerified = false;
+    double sheetReverseDistanceBound = 0;
+    size_t sheetReverseTrianglesChecked = 0;
+    std::string sheetReverseReason;
 };
 // Transient conforming preview, not a global surface-distance certificate.
 CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);

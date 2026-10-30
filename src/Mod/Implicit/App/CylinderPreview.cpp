@@ -229,10 +229,19 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         return append(world(px, py, low + (high - low) * .5));
     };
     const auto fieldCenter = root(0, 0);
+    // A separate reference chart covers an inscribed convex polygon. These
+    // coordinates are proof witnesses, never replacements for native geometry.
+    const double chartRadius = s.Radius - 8 * precision;
+    require(chartRadius > precision, "Cylinder preview chart precision");
+    std::map<uint32_t, std::array<double, 2>> fieldChart;
+    fieldChart[fieldCenter] = {0, 0};
     std::vector<uint32_t> previous;
     for (unsigned ring = 1; ring <= resolution; ++ring) {
         std::vector<uint32_t> current;
         for (size_t j = 0; j < sheet.size(); ++j) {
+            const auto boundary = local(result.points[sheet[j]]);
+            const double boundaryRadius = std::hypot(boundary.X(), boundary.Y());
+            require(boundaryRadius > precision, "Cylinder preview boundary at axis");
             if (ring == resolution) {
                 current.push_back(sheet[j]);
             }
@@ -244,6 +253,8 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
                     * std::min(1., (s.Radius - precision) / radial);
                 current.push_back(root(p.X() * factor, p.Y() * factor));
             }
+            const double factor = double(ring) / resolution * chartRadius / boundaryRadius;
+            fieldChart[current.back()] = {boundary.X() * factor, boundary.Y() * factor};
         }
         for (size_t j = 0; j < sheet.size(); ++j) {
             const size_t next = (j + 1) % sheet.size();
@@ -415,6 +426,86 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         }
         result.fieldTriangleDistanceBound = std::max(
             result.fieldTriangleDistanceBound, displacement + reach);
+    }
+    // Reverse coverage: the concentric reference chart tiles its convex
+    // polygon. Every reference triangle has the same barycentric correspondence
+    // to an uploaded triangle. Bound the root above every reference XY point
+    // by residual / the fresh full-cylinder axial derivative lower bound.
+    double sheetTurn = 0, sheetSagitta = 0;
+    bool sheetWinding = true;
+    for (size_t i = 0; i < sheet.size(); ++i) {
+        const auto& a = fieldChart.at(sheet[i]);
+        const auto& b = fieldChart.at(sheet[(i + 1) % sheet.size()]);
+        double gap = std::atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]);
+        if (gap < 0) {
+            gap += turn;
+        }
+        sheetTurn += gap;
+        sheetWinding = sheetWinding && gap > 0 && gap < std::acos(-1.);
+        const double reservedGap = gap + 8 * precision / chartRadius;
+        sheetSagitta = std::max(sheetSagitta, chartRadius * reservedGap * reservedGap / 8);
+    }
+    sheetWinding = sheetWinding && std::abs(sheetTurn - turn)
+        <= 32768 * std::numeric_limits<double>::epsilon() * (1 + sheet.size());
+    const double diskDeficit = s.Radius - chartRadius + sheetSagitta + precision;
+    result.sheetReverseDistanceVerified = sheetWinding && std::isfinite(diskDeficit);
+    if (!result.sheetReverseDistanceVerified) {
+        result.sheetReverseReason = "Reference sheet chart winding or global derivative unresolved";
+    }
+    double maximumDisplacement = 0, maximumResidual = 0;
+    for (size_t t = 0; t < result.triangles.size() && result.sheetReverseDistanceVerified; ++t) {
+        if (result.faces[t] != 3) {
+            continue;
+        }
+        std::array<gp_Pnt, 3> reference;
+        double displacement = precision, residual = 0, diameter = 0;
+        bool inDomain = true;
+        for (size_t j = 0; j < 3; ++j) {
+            const uint32_t index = result.triangles[t][j];
+            const auto upload = uploaded(index);
+            const auto xy = fieldChart.at(index);
+            const auto point = world(xy[0], xy[1], local(upload).Z());
+            reference[j] = gp_Pnt(point.x, point.y, point.z);
+            displacement = std::max(displacement, (upload - point).Length() + precision);
+            residual = std::max(residual, std::abs(BRep_ImplicitTool::Value(primitive, reference[j])));
+            inDomain = inDomain && BRep_ImplicitTool::IsInDomain(source.Source.Faces[2], reference[j]);
+        }
+        for (size_t j = 0; j < 3; ++j) {
+            diameter = std::max(diameter, reference[j].Distance(reference[(j + 1) % 3]));
+        }
+        ++result.sheetReverseTrianglesChecked;
+        residual += hessian * diameter * diameter / 6 + reserve;
+        if (!inDomain || !std::isfinite(displacement) || !std::isfinite(residual)) {
+            result.sheetReverseDistanceVerified = false;
+            result.sheetReverseReason = "Reference sheet triangle domain or finite residual unresolved";
+            break;
+        }
+        maximumDisplacement = std::max(maximumDisplacement, displacement);
+        maximumResidual = std::max(maximumResidual, residual);
+    }
+    if (result.sheetReverseDistanceVerified) {
+        const double numerator = maximumResidual + diskDeficit * field->LipschitzBound() / scale;
+        const double remaining = tolerance - maximumDisplacement - diskDeficit - precision;
+        const double requested = remaining > 0 ? numerator / remaining : -1.;
+        double lower = axial.DerivativeLowerBound;
+        if (requested >= lower && std::isfinite(requested)) {
+            const auto refined = BRepClass3d_ImplicitCylinder::CheckAxialField(
+                primitive, s, 24, 200000, requested);
+            if (refined.MonotonicityVerified) {
+                lower = refined.DerivativeLowerBound;
+            }
+            else {
+                result.sheetReverseReason = refined.Reason;
+            }
+        }
+        const double bound = maximumDisplacement + diskDeficit + precision + numerator / lower;
+        result.sheetReverseDistanceVerified = requested >= 0 && std::isfinite(bound) && bound <= tolerance;
+        if (result.sheetReverseDistanceVerified) {
+            result.sheetReverseDistanceBound = bound;
+        }
+        else if (result.sheetReverseReason.empty()) {
+            result.sheetReverseReason = "Reference sheet reverse-distance budget unresolved";
+        }
     }
     return result;
 }

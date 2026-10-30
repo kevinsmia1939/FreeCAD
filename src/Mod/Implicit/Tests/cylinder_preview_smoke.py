@@ -25,9 +25,27 @@ def triangle_distance(point, a, b, c):
         distances.append((point-first-edge*t).Length)
     return min(distances)
 
-for negative in (False, True):
+for negative, tilted in ((False, False), (True, False), (False, True)):
     origin = (1.2, -.4, 2.1) if negative else (0, 0, 0)
-    axis = (0, 0, -1) if negative else (0, 0, 1)
+    axis_vector = App.Vector(.2, .1, 1) if tilted else App.Vector(0, 0, -1 if negative else 1)
+    axis_vector.normalize()
+    axis = tuple(axis_vector)
+    x_vector = App.Vector(1, 0, 0)-axis_vector*axis_vector.x
+    x_vector.normalize()
+    y_vector = axis_vector.cross(x_vector)
+    origin_vector = App.Vector(*origin)
+    def world(x, y, height):
+        return origin_vector+x_vector*x+y_vector*y+axis_vector*height
+    def root_at(x, y):
+        lo, hi = -1.7, 1.3
+        flo = native.value(source, tuple(world(x, y, lo)))
+        for _ in range(60):
+            mid = (lo+hi)/2
+            if native.value(source, tuple(world(x, y, mid)))*flo > 0:
+                lo = mid
+            else:
+                hi = mid
+        return (lo+hi)/2
     source = native.gyroid(10, .21, (-10, -10, -10), (10, 10, 10))
     if negative:
         source = native.translated(source, origin)
@@ -47,6 +65,8 @@ for negative in (False, True):
     assert not coarse["field_triangle_distance_verified"]
     assert coarse["field_triangle_reason"]
     assert not coarse["surface_distance_verified"]
+    assert not coarse["sheet_reverse_distance_verified"]
+    assert coarse["sheet_reverse_reason"]
     mesh = Implicit.cylinderPreview(obj, 6)
     assert mesh["mesh_incidence_verified"] and not mesh["surface_distance_verified"]
     assert set(mesh["native_faces"]) == {1, 2, 3}
@@ -58,6 +78,9 @@ for negative in (False, True):
     assert mesh["field_triangle_buffer"] == "binary32_upload"
     assert mesh["field_triangles_checked"] == mesh["native_faces"].count(3)
     assert 0 < mesh["field_triangle_distance_bound"] <= .1
+    assert mesh["sheet_reverse_distance_verified"], mesh["sheet_reverse_reason"]
+    assert mesh["sheet_reverse_triangles_checked"] == mesh["native_faces"].count(3)
+    assert 0 < mesh["sheet_reverse_distance_bound"] <= .1
     uploaded = [App.Vector(*(struct.unpack('f', struct.pack('f', v))[0] for v in p))
                 for p in mesh["points"]]
     assert mesh["cap_disk_distance_verified"], mesh["cap_disk_reason"]
@@ -67,20 +90,28 @@ for negative in (False, True):
     cap_triangles = [tuple(uploaded[i] for i in tri)
                      for tri, face in zip(mesh["triangles"], mesh["native_faces"]) if face == 1]
     # The actual retained cap is the opposite end of the qualified axial sheet.
-    cap_z = sum(p.z for p in cap_triangles[0])/3
-    cap_height = min((-1.7, 1.3), key=lambda h: abs(origin[2]+axis[2]*h-cap_z))
-    cap_z = origin[2]+axis[2]*cap_height
+    cap_height_sample = (sum(cap_triangles[0], App.Vector())/3-origin_vector).dot(axis_vector)
+    cap_height = min((-1.7, 1.3), key=lambda h: abs(h-cap_height_sample))
     for radius in (0, .25, .5):
         for i in range(29):
             angle = 2*math.pi*(i+.37)/29
-            point = App.Vector(origin[0]+radius*math.cos(angle),
-                               origin[1]+radius*math.sin(angle), cap_z)
+            point = world(radius*math.cos(angle), radius*math.sin(angle), cap_height)
             distance = min(triangle_distance(point, *tri) for tri in cap_triangles)
             assert distance <= mesh["cap_disk_distance_bound"], distance
     for tri in cap_triangles:
         point = sum(tri, App.Vector())/3
-        radial_excess = max(0, math.hypot(point.x-origin[0], point.y-origin[1])-.5)
-        assert math.hypot(radial_excess, point.z-cap_z) <= mesh["cap_disk_distance_bound"]
+        delta = point-origin_vector
+        radial_excess = max(0, math.hypot(delta.dot(x_vector), delta.dot(y_vector))-.5)
+        assert math.hypot(radial_excess, delta.dot(axis_vector)-cap_height) <= mesh["cap_disk_distance_bound"]
+    field_triangles = [tuple(uploaded[i] for i in tri)
+                       for tri, face in zip(mesh["triangles"], mesh["native_faces"]) if face == 3]
+    for radius in (0, .23, .5):
+        for i in range(17):
+            angle = 2*math.pi*(i+.29)/17
+            px, py = radius*math.cos(angle), radius*math.sin(angle)
+            point = world(px, py, root_at(px, py))
+            distance = min(triangle_distance(point, *tri) for tri in field_triangles)
+            assert distance <= mesh["sheet_reverse_distance_bound"], distance
     sampled = 0
     for index, (triangle, face) in enumerate(zip(mesh["triangles"], mesh["native_faces"])):
         if face != 3 or index % 37:
@@ -96,17 +127,8 @@ for negative in (False, True):
             point = sum((uploaded[v] * w for v, w in zip(triangle, weights)), App.Vector())
             # Keep the witness inside the masked radius if float upload moved
             # a boundary point outward. Interior samples here are strictly inside.
-            lo, hi = -1.7, 1.3
-            def at(height):
-                return (point.x, point.y, origin[2] + axis[2] * height)
-            flo = native.value(source, at(lo))
-            for _ in range(60):
-                mid = (lo + hi)/2
-                if native.value(source, at(mid)) * flo > 0:
-                    lo = mid
-                else:
-                    hi = mid
-            distance = abs(point.z - at((lo + hi)/2)[2])
+            delta = point-origin_vector
+            distance = abs(delta.dot(axis_vector)-root_at(delta.dot(x_vector), delta.dot(y_vector)))
             assert distance <= mesh["field_triangle_distance_bound"], distance
         sampled += 1
     assert sampled
