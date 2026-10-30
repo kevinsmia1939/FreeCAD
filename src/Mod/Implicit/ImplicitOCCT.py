@@ -67,6 +67,9 @@ from _ImplicitOCCT import check_stored_cylinder_seam_coverage
 from _ImplicitOCCT import check_stored_cylinder_retained_cap
 from _ImplicitOCCT import check_stored_cylinder_retained_side
 from _ImplicitOCCT import qualify_stored_cylinder_geometry, inspect_stored_cylinder_geometry
+from _ImplicitOCCT import bound_stored_cylinder_volume as _bound_stored_cylinder_volume
+from _ImplicitOCCT import qualify_stored_cylinder_solid as _qualify_stored_cylinder_solid
+from _ImplicitOCCT import inspect_qualified_stored_cylinder_solid
 
 
 def _decode_cylinder_caps(result):
@@ -247,6 +250,20 @@ def bound_cylinder_material_volume(geometry_handle, volume_tolerance=.01, maximu
     _cylinder_volume_limits(maximum_depth, maximum_cells, maximum_root_tests)
     return _bound_cylinder_material_volume(geometry_handle, volume_tolerance, maximum_depth,
         maximum_cells, maximum_root_tests)
+
+
+def bound_stored_cylinder_volume(owner, volume_tolerance=.01, maximum_depth=24,
+                                 maximum_cells=200000, maximum_root_tests=10000000):
+    """Fresh mathematical material volume on verified restored geometry."""
+    return _bound_stored_cylinder_volume(owner, volume_tolerance, maximum_depth,
+                                        maximum_cells, maximum_root_tests)
+
+
+def qualify_stored_cylinder_solid(owner, volume_tolerance=.01, maximum_depth=24,
+                                  maximum_cells=200000, maximum_root_tests=10000000):
+    """Requalify the existing stored solid; retain its actual shared graph."""
+    return _qualify_stored_cylinder_solid(owner, volume_tolerance, maximum_depth,
+                                         maximum_cells, maximum_root_tests)
 
 
 def build_cylinder_solid(geometry_handle, volume_tolerance=.01, maximum_depth=24,

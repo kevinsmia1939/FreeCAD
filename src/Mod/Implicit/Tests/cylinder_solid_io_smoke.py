@@ -51,6 +51,33 @@ for negative in (True, False):
     failed = native.qualify_stored_cylinder_geometry(handle, 1)
     assert not failed["geometry_verified"]
     assert not native.inspect_stored_cylinder_geometry(failed["stored_geometry_handle"])["geometry_verified"]
+    qualified = native.qualify_stored_cylinder_solid(geometry["stored_geometry_handle"])
+    assert qualified["solid_validated"], qualified["solid_reason"]
+    assert qualified["solid_constructed"] and qualified["solid_closed"]
+    assert qualified["volume_verified"] and not qualified["solid_generic_occt_supported"]
+    assert qualified["volume_lower"] <= solid["volume_upper"]
+    assert qualified["volume_upper"] >= solid["volume_lower"]
+    qualified_handle = qualified["qualified_stored_solid_handle"]
+    qualified["solid_validated"] = False
+    assert native.inspect_qualified_stored_cylinder_solid(qualified_handle)["solid_validated"]
+    roundtrip = native.loads_cylinder_solid(native.dumps_cylinder_solid(qualified_handle))
+    assert roundtrip["topology_validated"] and not roundtrip["solid_validated"]
+    assert not roundtrip["geometry_verified"] and not roundtrip["volume_verified"]
+    assert roundtrip["stored_volume_lower"] == qualified["volume_lower"]
+    assert roundtrip["stored_volume_upper"] == qualified["volume_upper"]
+    volume = native.bound_stored_cylinder_volume(qualified_handle, volume_tolerance=.02)
+    assert volume["volume_verified"] and volume["volume_upper"] - volume["volume_lower"] <= .02
+    refused = native.qualify_stored_cylinder_solid(geometry["stored_geometry_handle"], maximum_cells=1)
+    assert not refused["solid_validated"] and not refused["solid_constructed"]
+    coarse = native.qualify_stored_cylinder_solid(geometry["stored_geometry_handle"], volume_tolerance=100)
+    assert coarse["volume_verified"] and not coarse["solid_validated"]
+    for owner in (failed["stored_geometry_handle"], refused["qualified_stored_solid_handle"]):
+        try:
+            native.bound_stored_cylinder_volume(owner)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Failed restored owner accepted")
     for flag in ("geometry_verified", "volume_verified", "solid_validated",
                  "solid_generic_occt_supported"):
         assert not restored[flag], flag

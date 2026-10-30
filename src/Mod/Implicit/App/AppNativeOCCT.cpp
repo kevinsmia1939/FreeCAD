@@ -55,6 +55,15 @@ constexpr const char* cylinderGeometryName = "ImplicitOCCT.CylinderGeometry.v1";
 constexpr const char* cylinderSolidName = "ImplicitOCCT.CylinderSolid.v1";
 constexpr const char* storedCylinderName = "ImplicitOCCT.StoredCylinderSolid.v1";
 constexpr const char* storedCylinderGeometryName = "ImplicitOCCT.StoredCylinderGeometry.v1";
+constexpr const char* qualifiedStoredCylinderName = "ImplicitOCCT.QualifiedStoredCylinder.v1";
+
+void destroyQualifiedStoredCylinder(PyObject* capsule)
+{
+    if (PyCapsule_IsValid(capsule, qualifiedStoredCylinderName)) {
+        delete static_cast<BRepClass3d_ImplicitCylinderIO::Solid*>(
+            PyCapsule_GetPointer(capsule, qualifiedStoredCylinderName));
+    }
+}
 
 void destroyStoredCylinderGeometry(PyObject* capsule)
 {
@@ -1753,13 +1762,19 @@ PyObject* dumpCylinderSolid(PyObject* args)
 {
     PyObject* object;
     if (!PyArg_ParseTuple(args, "O", &object)) return nullptr;
-    if (!PyCapsule_IsValid(object, cylinderSolidName)) {
+    std::ostringstream stream;
+    if (PyCapsule_IsValid(object, qualifiedStoredCylinderName)) {
+        BRepClass3d_ImplicitCylinderIO::Write(*static_cast<const BRepClass3d_ImplicitCylinderIO::Solid*>(
+            PyCapsule_GetPointer(object, qualifiedStoredCylinderName)), stream);
+    }
+    else if (PyCapsule_IsValid(object, cylinderSolidName)) {
+        BRepClass3d_ImplicitCylinderIO::Write(*static_cast<const BRepClass3d_ImplicitCylinder::NativeSolid*>(
+            PyCapsule_GetPointer(object, cylinderSolidName)), stream);
+    }
+    else {
         PyErr_SetString(PyExc_TypeError, "expected a qualified native cylinder-solid handle");
         return nullptr;
     }
-    std::ostringstream stream;
-    BRepClass3d_ImplicitCylinderIO::Write(*static_cast<const BRepClass3d_ImplicitCylinder::NativeSolid*>(
-        PyCapsule_GetPointer(object, cylinderSolidName)), stream);
     const auto text = stream.str();
     return PyUnicode_FromStringAndSize(text.data(), static_cast<Py_ssize_t>(text.size()));
 }
@@ -1867,6 +1882,74 @@ PyObject* qualifyStoredCylinderGeometry(PyObject* args)
     Object result(storedCylinderGeometryReport(*value));
     if (!result || !set(result.get(), "stored_geometry_handle", capsule.release())) return nullptr;
     return result.release();
+}
+
+const BRepClass3d_ImplicitCylinderIO::Geometry* getStoredGeometry(PyObject* object)
+{
+    if (PyCapsule_IsValid(object, storedCylinderGeometryName)) {
+        const auto* value = static_cast<const BRepClass3d_ImplicitCylinderIO::Geometry*>(
+            PyCapsule_GetPointer(object, storedCylinderGeometryName));
+        if (value->Verified) return value;
+        PyErr_SetString(PyExc_ValueError, "stored cylinder geometry is unqualified");
+        return nullptr;
+    }
+    if (PyCapsule_IsValid(object, qualifiedStoredCylinderName)) {
+        const auto* value = static_cast<const BRepClass3d_ImplicitCylinderIO::Solid*>(
+            PyCapsule_GetPointer(object, qualifiedStoredCylinderName));
+        if (value->Verified) return &value->Source;
+        PyErr_SetString(PyExc_ValueError, "restored cylinder solid is unqualified");
+        return nullptr;
+    }
+    PyErr_SetString(PyExc_TypeError, "expected verified stored geometry or a qualified restored solid");
+    return nullptr;
+}
+
+PyObject* qualifiedStoredCylinderReport(const BRepClass3d_ImplicitCylinderIO::Solid& value)
+{
+    Object result(storedCylinderGeometryReport(value.Source)), volume(cylinderVolumeReport(value.Volume));
+    if (!result || !volume || PyDict_Update(result.get(), volume.get()) < 0
+        || !set(result.get(), "solid_validated", PyBool_FromLong(value.Verified))
+        || !set(result.get(), "solid_constructed", PyBool_FromLong(!value.Shape.IsNull()))
+        || !set(result.get(), "solid_closed", PyBool_FromLong(!value.Shape.IsNull() && value.Shape.Closed()))
+        || !set(result.get(), "solid_reason", PyUnicode_FromString(value.Reason.c_str()))) return nullptr;
+    return result.release();
+}
+
+PyObject* inspectQualifiedStoredCylinder(PyObject* args)
+{
+    PyObject* object;
+    if (!PyArg_ParseTuple(args, "O", &object)) return nullptr;
+    if (!PyCapsule_IsValid(object, qualifiedStoredCylinderName)) {
+        PyErr_SetString(PyExc_TypeError, "expected a restored cylinder-solid result");
+        return nullptr;
+    }
+    return qualifiedStoredCylinderReport(*static_cast<const BRepClass3d_ImplicitCylinderIO::Solid*>(
+        PyCapsule_GetPointer(object, qualifiedStoredCylinderName)));
+}
+
+template<bool Solid>
+PyObject* storedCylinderVolume(PyObject* args)
+{
+    PyObject* object;
+    BRepClass3d_ImplicitCylinder::VolumeSettings settings;
+    unsigned long long cells = settings.MaximumCells, roots = settings.MaximumRootTests;
+    if (!PyArg_ParseTuple(args, "O|diKK", &object, &settings.AbsoluteTolerance, &settings.MaximumDepth, &cells, &roots)) return nullptr;
+    settings.MaximumCells = cells; settings.MaximumRootTests = roots;
+    const auto* geometry = getStoredGeometry(object);
+    if (!geometry) return nullptr;
+    if constexpr (!Solid) {
+        return cylinderVolumeReport(BRepClass3d_ImplicitCylinderIO::BoundVolume(*geometry, settings));
+    }
+    else {
+        auto owned = std::make_unique<BRepClass3d_ImplicitCylinderIO::Solid>(
+            BRepClass3d_ImplicitCylinderIO::QualifySolid(*geometry, settings));
+        Object capsule(PyCapsule_New(owned.get(), qualifiedStoredCylinderName, destroyQualifiedStoredCylinder));
+        if (!capsule) return nullptr;
+        const auto* value = owned.release();
+        Object result(qualifiedStoredCylinderReport(*value));
+        if (!result || !set(result.get(), "qualified_stored_solid_handle", capsule.release())) return nullptr;
+        return result.release();
+    }
 }
 
 template<int Mode>
@@ -3593,6 +3676,12 @@ PyMethodDef methods[] = {
      "Own freshly verified stored boundary geometry without promoting volume or solid qualification."},
     {"inspect_stored_cylinder_geometry", checked<inspectStoredCylinderGeometry>, METH_VARARGS,
      "Inspect an immutable stored-geometry result without rebuilding."},
+    {"bound_stored_cylinder_volume", checked<storedCylinderVolume<false>>, METH_VARARGS,
+     "Fresh bounded mathematical volume on verified restored geometry."},
+    {"qualify_stored_cylinder_solid", checked<storedCylinderVolume<true>>, METH_VARARGS,
+     "Qualify the unchanged stored solid with fresh bounded positive material volume."},
+    {"inspect_qualified_stored_cylinder_solid", checked<inspectQualifiedStoredCylinder>, METH_VARARGS,
+     "Inspect restored solid qualification without rebuilding."},
     {"build_cylinder_caps", checked<buildCylinderCaps<false>>, METH_VARARGS,
      "Build actual planar cap regions; owned topology plus independent conventional face previews, NOT solids."},
     {"inspect_cylinder_caps", checked<inspectCylinderCaps>, METH_VARARGS,
