@@ -327,6 +327,9 @@ private:
         report["field_triangles_checked"]=Py::Long(preview.fieldTrianglesChecked);
         report["field_triangle_reason"]=Py::String(preview.fieldTriangleReason);
         report["field_triangle_buffer"]=Py::String("binary32_upload");
+        report["cap_disk_distance_verified"]=Py::Boolean(preview.capDiskDistanceVerified);
+        report["cap_disk_distance_bound"]=Py::Float(preview.capDiskDistanceBound);
+        report["cap_disk_reason"]=Py::String(preview.capDiskReason);
         report["curve_deflection"]=Py::Float(preview.curveDeflection);
         report["root_point_bound"]=Py::Float(preview.rootPointBound);
         report["upload_bound"]=Py::Float(preview.uploadBound);

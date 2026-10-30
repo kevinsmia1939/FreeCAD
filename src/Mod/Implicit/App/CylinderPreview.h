@@ -21,6 +21,9 @@ struct CylinderPreview
     double fieldTriangleDistanceBound = 0;
     size_t fieldTrianglesChecked = 0;
     std::string fieldTriangleReason;
+    bool capDiskDistanceVerified = false;
+    double capDiskDistanceBound = 0;
+    std::string capDiskReason;
 };
 // Transient conforming preview, not a global surface-distance certificate.
 CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);

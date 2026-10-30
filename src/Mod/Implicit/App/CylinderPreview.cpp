@@ -318,6 +318,45 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         result.uploadBound < s.DistanceTolerance,
         "Cylinder preview upload displacement exceeds geometry tolerance"
     );
+    // Compare the actual uploaded fan to an ideal inscribed disk polygon with
+    // the same indexed triangles. Barycentric correspondence bounds both
+    // directions between the two fans by the largest vertex displacement.
+    // The ideal polygon's disk deficit is bounded on each angular interval.
+    const auto uploaded = [&](uint32_t index) {
+        const auto& p = result.points[index];
+        return Base::Vector3d(double(float(p.x)), double(float(p.y)), double(float(p.z)));
+    };
+    double capPerturbation = (uploaded(center) - world(0, 0, capHeight)).Length() + precision;
+    double capSagitta = 0;
+    double capTurn = 0;
+    bool capIntervals = true;
+    for (size_t i = 0; i < cap.size(); ++i) {
+        const auto q = local(result.points[cap[i]]);
+        const auto next = local(result.points[cap[(i + 1) % cap.size()]]);
+        const double radial = std::hypot(q.X(), q.Y());
+        double gap = std::atan2(q.X() * next.Y() - q.Y() * next.X(),
+                                q.X() * next.X() + q.Y() * next.Y());
+        if (gap < 0) {
+            gap += turn;
+        }
+        capTurn += gap;
+        capIntervals = capIntervals && radial > precision && gap > 0 && gap < std::acos(-1.);
+        if (radial > precision) {
+            const auto ideal = world(s.Radius * q.X() / radial,
+                                     s.Radius * q.Y() / radial, capHeight);
+            capPerturbation = std::max(capPerturbation, (uploaded(cap[i]) - ideal).Length() + precision);
+        }
+        const double reservedGap = gap + 8 * precision / s.Radius;
+        capSagitta = std::max(capSagitta, s.Radius * reservedGap * reservedGap / 8);
+    }
+    capIntervals = capIntervals && std::abs(capTurn - turn)
+        <= 32768 * std::numeric_limits<double>::epsilon() * (1 + cap.size());
+    result.capDiskDistanceBound = capPerturbation + capSagitta + precision;
+    result.capDiskDistanceVerified = capIntervals && std::isfinite(result.capDiskDistanceBound)
+        && result.capDiskDistanceBound <= s.DistanceTolerance;
+    if (!result.capDiskDistanceVerified) {
+        result.capDiskReason = "Cap fan angular coverage or uploaded disk-distance bound unresolved";
+    }
     // Bound entire triangles, rather than infer a surface claim from vertex roots.
     // Work on the binary32 coordinates actually consumed by Coin.
     result.fieldTriangleDistanceVerified = true;

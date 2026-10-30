@@ -6,6 +6,25 @@ import FreeCAD as App
 import Implicit
 import ImplicitOCCT as native
 
+def triangle_distance(point, a, b, c):
+    """Independent point-to-triangle distance, including the three boundaries."""
+    ab, ac = b-a, c-a
+    normal = ab.cross(ac)
+    projected = point - normal * ((point-a).dot(normal)/normal.dot(normal))
+    v = projected-a
+    aa, bb, cc = ab.dot(ab), ab.dot(ac), ac.dot(ac)
+    denominator = aa*cc-bb*bb
+    u = (cc*v.dot(ab)-bb*v.dot(ac))/denominator
+    w = (aa*v.dot(ac)-bb*v.dot(ab))/denominator
+    if u >= 0 and w >= 0 and u+w <= 1:
+        return (point-projected).Length
+    distances = []
+    for first, last in ((a,b), (b,c), (c,a)):
+        edge = last-first
+        t = max(0, min(1, (point-first).dot(edge)/edge.dot(edge)))
+        distances.append((point-first-edge*t).Length)
+    return min(distances)
+
 for negative in (False, True):
     origin = (1.2, -.4, 2.1) if negative else (0, 0, 0)
     axis = (0, 0, -1) if negative else (0, 0, 1)
@@ -41,6 +60,27 @@ for negative in (False, True):
     assert 0 < mesh["field_triangle_distance_bound"] <= .1
     uploaded = [App.Vector(*(struct.unpack('f', struct.pack('f', v))[0] for v in p))
                 for p in mesh["points"]]
+    assert mesh["cap_disk_distance_verified"], mesh["cap_disk_reason"]
+    assert 0 < mesh["cap_disk_distance_bound"] <= .1
+    assert coarse["cap_disk_distance_verified"], coarse["cap_disk_reason"]
+    assert mesh["cap_disk_distance_bound"] < coarse["cap_disk_distance_bound"]
+    cap_triangles = [tuple(uploaded[i] for i in tri)
+                     for tri, face in zip(mesh["triangles"], mesh["native_faces"]) if face == 1]
+    # The actual retained cap is the opposite end of the qualified axial sheet.
+    cap_z = sum(p.z for p in cap_triangles[0])/3
+    cap_height = min((-1.7, 1.3), key=lambda h: abs(origin[2]+axis[2]*h-cap_z))
+    cap_z = origin[2]+axis[2]*cap_height
+    for radius in (0, .25, .5):
+        for i in range(29):
+            angle = 2*math.pi*(i+.37)/29
+            point = App.Vector(origin[0]+radius*math.cos(angle),
+                               origin[1]+radius*math.sin(angle), cap_z)
+            distance = min(triangle_distance(point, *tri) for tri in cap_triangles)
+            assert distance <= mesh["cap_disk_distance_bound"], distance
+    for tri in cap_triangles:
+        point = sum(tri, App.Vector())/3
+        radial_excess = max(0, math.hypot(point.x-origin[0], point.y-origin[1])-.5)
+        assert math.hypot(radial_excess, point.z-cap_z) <= mesh["cap_disk_distance_bound"]
     sampled = 0
     for index, (triangle, face) in enumerate(zip(mesh["triangles"], mesh["native_faces"])):
         if face != 3 or index % 37:
