@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "CylinderGeometry.h"
+#include "CylinderBoundary.h"
+#include <TopExp_Explorer.hxx>
 #include <Base/Exception.h>
 #include <Base/Reader.h>
 #include <Base/Writer.h>
@@ -70,6 +72,7 @@ TopAbs_ShapeEnum kind(const char* type)
 class CylinderSegment: public Data::Segment
 {
 public:
+    std::shared_ptr<const IO::Solid> owner;
     std::string name;
     TopoDS_Shape shape;
     std::string getName() const override
@@ -77,6 +80,14 @@ public:
         return name;
     }
 };
+const CylinderSegment& segment(const Data::Segment* value, const std::shared_ptr<const IO::Solid>& owner)
+{
+    const auto* selected = dynamic_cast<const CylinderSegment*>(value);
+    if (!selected || !owner || selected->owner != owner) {
+        throw Base::ValueError("Foreign cylinder subelement");
+    }
+    return *selected;
+}
 }  // namespace
 
 TYPESYSTEM_SOURCE(Implicit::CylinderGeometry, Data::ComplexGeoData)
@@ -110,8 +121,62 @@ Data::Segment* CylinderGeometry::getSubElement(const char* type, unsigned long i
     }
     auto result = std::make_unique<CylinderSegment>();
     result->name = std::string(type) + std::to_string(index);
+    result->owner = qualified;
     result->shape = map.FindKey(int(index));
     return result.release();
+}
+void CylinderGeometry::getLines(
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines,
+    double accuracy,
+    uint16_t
+) const
+{
+    if (!ready()) {
+        throw Base::ValueError("Cylinder geometry is unverified");
+    }
+    detail::cylinderBoundary(qualified->Shape, accuracy, points, lines);
+}
+void CylinderGeometry::getPoints(
+    std::vector<Base::Vector3d>& points,
+    std::vector<Base::Vector3d>&,
+    double,
+    uint16_t
+) const
+{
+    if (!ready()) {
+        throw Base::ValueError("Cylinder geometry is unverified");
+    }
+    Map vertices;
+    TopExp::MapShapes(qualified->Shape, TopAbs_VERTEX, vertices);
+    for (const auto& vertex : vertices) {
+        const auto p = BRep_Tool::Pnt(TopoDS::Vertex(vertex));
+        points.emplace_back(p.X(), p.Y(), p.Z());
+    }
+}
+void CylinderGeometry::getLinesFromSubElement(
+    const Data::Segment* value,
+    std::vector<Base::Vector3d>& points,
+    std::vector<Line>& lines
+) const
+{
+    detail::cylinderBoundary(segment(value, qualified).shape, .01, points, lines);
+}
+bool CylinderGeometry::getFirstVertexFromSubElement(const Data::Segment* value, Base::Vector3d& point) const
+{
+    const auto& shape = segment(value, qualified).shape;
+    if (shape.ShapeType() == TopAbs_VERTEX) {
+        const auto p = BRep_Tool::Pnt(TopoDS::Vertex(shape));
+        point = Base::Vector3d(p.X(), p.Y(), p.Z());
+        return true;
+    }
+    TopExp_Explorer vertices(shape, TopAbs_VERTEX);
+    if (!vertices.More()) {
+        return false;
+    }
+    const auto p = BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current()));
+    point = Base::Vector3d(p.X(), p.Y(), p.Z());
+    return true;
 }
 void CylinderGeometry::setTransform(const Base::Matrix4D& matrix)
 {

@@ -31,6 +31,44 @@ with tempfile.TemporaryDirectory() as folder:
     obj.Geometry = ready["qualified_stored_solid_handle"]
     assert obj.GeometryState == "Ready"
     assert native.inspect_qualified_stored_cylinder_solid(obj.Geometry)["solid_validated"]
+    source_record = native.dumps_cylinder_solid(obj.Geometry)
+    snapshot = Implicit.nativeGeometry(obj)
+    assert [snapshot.countSubElements(t) for t in ("Solid", "Shell", "Face", "Edge", "Vertex")] == [1, 1, 3, 4, 3]
+    points, segments = snapshot.getLines(.01)
+    vertices, normals = snapshot.getPoints(.01)
+    assert len(vertices) == 3 and not normals
+    assert len(points) > len(vertices) and segments
+    assert all((points[i] - vertices[i]).Length < 1e-12 for i in range(3))
+    degrees = [0] * len(points)
+    for a, b in segments:
+        assert a != b and 0 <= a < len(points) and 0 <= b < len(points)
+        degrees[a] += 1
+        degrees[b] += 1
+    assert sorted(degrees[:3]) == [2, 3, 3], degrees[:3]
+    assert all(degree == 2 for degree in degrees[3:])
+    circles = 0
+    for edge in range(1, 5):
+        ep, el = snapshot.getLinesFromSubElement("Edge", edge)
+        if max(p.z for p in ep) - min(p.z for p in ep) < 1e-10:
+            circles += 1
+            for a, b in el:
+                middle = (ep[a] + ep[b]) * .5
+                assert abs(.5 - math.hypot(middle.x, middle.y)) <= .01 + 1e-10
+    assert circles == 2
+    for accuracy in (0, -1, float("nan"), 1e-30):
+        try:
+            snapshot.getLines(accuracy)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Invalid or unresolvable boundary deflection accepted")
+    try:
+        snapshot.getFaces(.01)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Boundary lines were substituted for a surface mesh")
+    assert native.dumps_cylinder_solid(obj.Geometry) == source_record
     if App.GuiUp:
         import FreeCADGui as Gui
         assert Gui.activeDocument().getObject(obj.Name) is not None
@@ -70,6 +108,14 @@ with tempfile.TemporaryDirectory() as folder:
     doc.UndoMode = 1
     obj = doc.getObject("Cylinder")
     assert obj.GeometryState == "Unverified", obj.GeometryState
+    unverified_snapshot = Implicit.nativeGeometry(obj)
+    assert unverified_snapshot.countSubElements("Edge") == 0
+    try:
+        unverified_snapshot.getLines(.01)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Unverified cylinder exposed display boundaries")
     restored = native.inspect_stored_cylinder_solid(obj.Geometry)
     assert restored["topology_validated"]
     assert not restored["geometry_verified"] and not restored["solid_validated"]
@@ -90,4 +136,6 @@ with tempfile.TemporaryDirectory() as folder:
     assert obj.GeometryState == "Ready"
     assert native.inspect_qualified_stored_cylinder_solid(obj.Geometry)["solid_validated"]
     App.closeDocument(doc.Name)
+    assert snapshot.countSubElements("Vertex") == 3
+    assert len(snapshot.getLines(.01)[1]) == len(segments)
 print("native implicit cylinder property smoke test passed", flush=True)

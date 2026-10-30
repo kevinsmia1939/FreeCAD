@@ -294,6 +294,15 @@ private:
             throw Py::Exception();
         }
         auto* owner = static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
+        if (auto* cylinder = dynamic_cast<PropertyNativeCylinderGeometry*>(owner->getPropertyByName("Geometry"))) {
+            const auto* source = static_cast<const CylinderGeometry*>(cylinder->getComplexData());
+            auto snapshot = std::make_unique<CylinderGeometry>();
+            snapshot->qualified = source->qualified;
+            snapshot->stored = source->stored;
+            auto* wrapper = new Data::ComplexGeoDataPy(snapshot.get());
+            snapshot.release();
+            return Py::Object(wrapper, true);
+        }
         auto* property = dynamic_cast<PropertyNativeGeometry*>(owner->getPropertyByName("Geometry"));
         if (!property) {
             throw Py::TypeError("Expected a feature with native mixed geometry");

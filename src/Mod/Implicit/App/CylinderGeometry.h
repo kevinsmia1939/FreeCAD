@@ -27,6 +27,19 @@ public:
     std::vector<const char*> getElementTypes() const override;
     unsigned long countSubElements(const char*) const override;
     Data::Segment* getSubElement(const char*, unsigned long) const override;
+    void getLines(std::vector<Base::Vector3d>&, std::vector<Line>&, double, uint16_t = 0) const override;
+    void getPoints(
+        std::vector<Base::Vector3d>&,
+        std::vector<Base::Vector3d>&,
+        double,
+        uint16_t = 0
+    ) const override;
+    void getLinesFromSubElement(
+        const Data::Segment*,
+        std::vector<Base::Vector3d>&,
+        std::vector<Line>&
+    ) const override;
+    bool getFirstVertexFromSubElement(const Data::Segment*, Base::Vector3d&) const override;
     void setTransform(const Base::Matrix4D&) override;
     Base::Matrix4D getTransform() const override;
     void transformGeometry(const Base::Matrix4D&) override;
