@@ -322,6 +322,11 @@ private:
         report["source_geometry_verified"]=Py::Boolean(true);
         report["mesh_incidence_verified"]=Py::Boolean(true);
         report["surface_distance_verified"]=Py::Boolean(false);
+        report["field_triangle_distance_verified"]=Py::Boolean(preview.fieldTriangleDistanceVerified);
+        report["field_triangle_distance_bound"]=Py::Float(preview.fieldTriangleDistanceBound);
+        report["field_triangles_checked"]=Py::Long(preview.fieldTrianglesChecked);
+        report["field_triangle_reason"]=Py::String(preview.fieldTriangleReason);
+        report["field_triangle_buffer"]=Py::String("binary32_upload");
         report["curve_deflection"]=Py::Float(preview.curveDeflection);
         report["root_point_bound"]=Py::Float(preview.rootPointBound);
         report["upload_bound"]=Py::Float(preview.uploadBound);

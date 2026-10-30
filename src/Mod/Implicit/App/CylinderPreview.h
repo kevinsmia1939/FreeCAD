@@ -2,6 +2,7 @@
 #pragma once
 #include "CylinderGeometry.h"
 #include <array>
+#include <string>
 namespace Implicit
 {
 struct CylinderPreview
@@ -14,6 +15,12 @@ struct CylinderPreview
     unsigned nativeVertices = 0;
     double rootPointBound = 0, curveDeflection = 0, uploadBound = 0;
     size_t rootTests = 0;
+    // Directed distance of every uploaded field triangle to the masked sheet.
+    // This does not certify reverse coverage or the other two faces.
+    bool fieldTriangleDistanceVerified = false;
+    double fieldTriangleDistanceBound = 0;
+    size_t fieldTrianglesChecked = 0;
+    std::string fieldTriangleReason;
 };
 // Transient conforming preview, not a global surface-distance certificate.
 CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);

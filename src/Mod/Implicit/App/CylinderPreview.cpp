@@ -318,6 +318,65 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         result.uploadBound < s.DistanceTolerance,
         "Cylinder preview upload displacement exceeds geometry tolerance"
     );
+    // Bound entire triangles, rather than infer a surface claim from vertex roots.
+    // Work on the binary32 coordinates actually consumed by Coin.
+    result.fieldTriangleDistanceVerified = true;
+    const double tolerance = s.DistanceTolerance;
+    for (size_t t = 0; t < result.triangles.size(); ++t) {
+        if (result.faces[t] != 3) {
+            continue;
+        }
+        std::array<gp_Pnt, 3> p, q;
+        std::array<gp_Vec, 3> radial;
+        double maximumRadius = 0;
+        for (size_t j = 0; j < 3; ++j) {
+            const auto& v = result.points[result.triangles[t][j]];
+            p[j] = gp_Pnt(double(float(v.x)), double(float(v.y)), double(float(v.z)));
+            const gp_Vec delta(s.Frame.Location(), p[j]);
+            radial[j] = delta - axis * delta.Dot(axis);
+            maximumRadius = std::max(maximumRadius, radial[j].Magnitude());
+        }
+        // A common affine radial contraction keeps every barycentric point
+        // within the convex cylindrical mask, including roundoff allowance.
+        const double factor = std::min(1., (s.Radius - precision) / (maximumRadius + precision));
+        double displacement = precision, residual = 0, diameter = 0;
+        gp_XYZ center(0, 0, 0);
+        for (size_t j = 0; j < 3; ++j) {
+            q[j] = p[j].Translated(radial[j] * (factor - 1));
+            displacement = std::max(displacement, p[j].Distance(q[j]) + precision);
+            residual = std::max(residual, std::abs(BRep_ImplicitTool::Value(primitive, q[j])));
+            center += q[j].XYZ() / 3.;
+        }
+        double radius = precision;
+        for (size_t j = 0; j < 3; ++j) {
+            radius = std::max(radius, q[j].Distance(gp_Pnt(center)) + precision);
+            diameter = std::max(diameter, q[j].Distance(q[(j + 1) % 3]));
+        }
+        // Taylor interpolation: variance of three barycentric vertices <= D^2/3.
+        residual += hessian * diameter * diameter / 6 + reserve;
+        const double derivative = std::abs(
+            BRep_ImplicitTool::Gradient(primitive, gp_Pnt(center)).Dot(axis))
+            - hessian * (radius + tolerance) - gradientReserve;
+        const double reach = derivative > 0 ? residual / derivative + precision : tolerance * 2;
+        bool verified = factor > 0 && std::isfinite(reach)
+            && displacement + reach <= tolerance;
+        // The six endpoints enclose a convex prism containing all axial root
+        // witnesses. The source box and this full-cylinder mask are convex.
+        for (size_t j = 0; j < 3 && verified; ++j) {
+            for (double sign : {-1., 1.}) {
+                verified = verified && BRep_ImplicitTool::IsInDomain(
+                    source.Source.Faces[2], q[j].Translated(axis * (sign * reach)));
+            }
+        }
+        ++result.fieldTrianglesChecked;
+        if (!verified) {
+            result.fieldTriangleDistanceVerified = false;
+            result.fieldTriangleReason = "Whole-triangle derivative, distance or masked-witness bound unresolved";
+            break;
+        }
+        result.fieldTriangleDistanceBound = std::max(
+            result.fieldTriangleDistanceBound, displacement + reach);
+    }
     return result;
 }
 }  // namespace Implicit

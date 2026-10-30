@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Both material signs and reversed/translated frames retain closed previews."""
 import math
+import struct
 import FreeCAD as App
 import Implicit
 import ImplicitOCCT as native
@@ -23,6 +24,10 @@ for negative in (False, True):
     obj = doc.addObject("Implicit::NativeCylinderFeature", "Cylinder")
     obj.Geometry = solid["qualified_stored_solid_handle"]
     before = native.dumps_cylinder_solid(obj.Geometry)
+    coarse = Implicit.cylinderPreview(obj, 2)
+    assert not coarse["field_triangle_distance_verified"]
+    assert coarse["field_triangle_reason"]
+    assert not coarse["surface_distance_verified"]
     mesh = Implicit.cylinderPreview(obj, 6)
     assert mesh["mesh_incidence_verified"] and not mesh["surface_distance_verified"]
     assert set(mesh["native_faces"]) == {1, 2, 3}
@@ -30,6 +35,12 @@ for negative in (False, True):
     volume = sum(vertices[a].dot(vertices[b].cross(vertices[c]))/6 for a, b, c in mesh["triangles"])
     assert volume > 0, volume
     assert mesh["root_point_bound"] <= .001 and mesh["upload_bound"] < .1
+    assert mesh["field_triangle_distance_verified"], mesh["field_triangle_reason"]
+    assert mesh["field_triangle_buffer"] == "binary32_upload"
+    assert mesh["field_triangles_checked"] == mesh["native_faces"].count(3)
+    assert 0 < mesh["field_triangle_distance_bound"] <= .1
+    uploaded = [App.Vector(*(struct.unpack('f', struct.pack('f', v))[0] for v in p))
+                for p in mesh["points"]]
     sampled = 0
     for index, (triangle, face) in enumerate(zip(mesh["triangles"], mesh["native_faces"])):
         if face != 3 or index % 37:
@@ -39,6 +50,24 @@ for negative in (False, True):
         expected = gradient * (1 if negative else -1)
         normal = App.Vector(*mesh["corner_normals"][3*index])
         assert normal.dot(expected)/expected.Length > .999999
+        # Independent interior samples exercise the reported whole-triangle
+        # bound on the actual float buffer, rather than only its root vertices.
+        for weights in ((1/3, 1/3, 1/3), (.7, .2, .1)):
+            point = sum((uploaded[v] * w for v, w in zip(triangle, weights)), App.Vector())
+            # Keep the witness inside the masked radius if float upload moved
+            # a boundary point outward. Interior samples here are strictly inside.
+            lo, hi = -1.7, 1.3
+            def at(height):
+                return (point.x, point.y, origin[2] + axis[2] * height)
+            flo = native.value(source, at(lo))
+            for _ in range(60):
+                mid = (lo + hi)/2
+                if native.value(source, at(mid)) * flo > 0:
+                    lo = mid
+                else:
+                    hi = mid
+            distance = abs(point.z - at((lo + hi)/2)[2])
+            assert distance <= mesh["field_triangle_distance_bound"], distance
         sampled += 1
     assert sampled
     assert native.dumps_cylinder_solid(obj.Geometry) == before
