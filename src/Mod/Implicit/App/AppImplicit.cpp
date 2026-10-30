@@ -14,6 +14,7 @@
 #include "PropertyBuildFeedback.h"
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
 # include "NativeGeometry.h"
+# include "CylinderGeometry.h"
 # include <App/ComplexGeoDataPy.h>
 #endif
 
@@ -794,6 +795,9 @@ PyMOD_INIT_FUNC(Implicit)
     Implicit::PropertyBuildFeedback::init();
 #ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
     Implicit::NativeGeometry::init();
+    Implicit::CylinderGeometry::init();
+    Implicit::PropertyNativeCylinderGeometry::init();
+    Implicit::NativeCylinderFeature::init();
     Implicit::NativeElementGeometry::init();
     Implicit::NativePlacedGeometry::init();
     Implicit::PropertyNativeGeometry::init();
