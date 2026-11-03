@@ -32,7 +32,15 @@ struct CylinderPreview
     double sideDistanceBound = 0;
     size_t sideTrianglesChecked = 0;
     std::string sideDistanceReason;
+    bool contactsVerified = false;
+    size_t contactPairs = 0, contactBoundsTests = 0;
+    std::string contactReason;
+    bool surfaceDistanceVerified() const
+    {
+        return fieldTriangleDistanceVerified && sheetReverseDistanceVerified
+            && capDiskDistanceVerified && sideDistanceVerified && contactsVerified;
+    }
 };
-// Transient conforming preview, not a global surface-distance certificate.
+// Transient preview with explicit distance/contact qualification results.
 CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);
 }  // namespace Implicit

@@ -80,7 +80,9 @@ with tempfile.TemporaryDirectory() as folder:
     assert vertex_bounds.XLength == vertex_bounds.YLength == vertex_bounds.ZLength == 0
     preview = Implicit.cylinderPreview(obj, 8)
     assert preview["source_geometry_verified"] and preview["mesh_incidence_verified"]
-    assert not preview["surface_distance_verified"]
+    assert preview["triangle_contacts_verified"], preview["contact_reason"]
+    assert preview["surface_distance_verified"]
+    assert 0 < preview["surface_distance_bound"] <= .1
     assert preview["native_vertex_count"] == 3 and len(preview["native_edges"]) == 4
     assert set(preview["native_faces"]) == {1, 2, 3}
     pp, tt = preview["points"], preview["triangles"]
@@ -128,7 +130,8 @@ with tempfile.TemporaryDirectory() as folder:
         assert renderer._mesh is not None, obj.ViewObject.PreviewState
         rgb = renderer._surface_material.diffuseColor.getValues()[0]
         assert all(abs(float(rgb[i]) - obj.ViewObject.SurfaceColor[i]) < 1e-6 for i in range(3))
-        assert not obj.ViewObject.SurfaceDistanceVerified
+        assert obj.ViewObject.SurfaceDistanceVerified
+        assert 0 < obj.ViewObject.SurfaceDistanceBound.Value <= .1
         assert set(renderer._elements) == {"Face1", "Face2", "Face3", "Edge1", "Edge2", "Edge3", "Edge4", "Vertex1", "Vertex2", "Vertex3"}
         for name in renderer._elements:
             detail = coin.SoPath()

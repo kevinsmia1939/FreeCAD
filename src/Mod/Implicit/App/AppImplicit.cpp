@@ -321,7 +321,14 @@ private:
         report["native_vertex_count"]=Py::Long(static_cast<unsigned long>(preview.nativeVertices));
         report["source_geometry_verified"]=Py::Boolean(true);
         report["mesh_incidence_verified"]=Py::Boolean(true);
-        report["surface_distance_verified"]=Py::Boolean(false);
+        report["surface_distance_verified"]=Py::Boolean(preview.surfaceDistanceVerified());
+        report["surface_distance_bound"]=Py::Float(preview.surfaceDistanceVerified()
+            ? std::max({preview.fieldTriangleDistanceBound,preview.sheetReverseDistanceBound,
+                        preview.capDiskDistanceBound,preview.sideDistanceBound}) : 0.);
+        report["triangle_contacts_verified"]=Py::Boolean(preview.contactsVerified);
+        report["contact_pairs"]=Py::Long(preview.contactPairs);
+        report["contact_bounds_tests"]=Py::Long(preview.contactBoundsTests);
+        report["contact_reason"]=Py::String(preview.contactReason);
         report["field_triangle_distance_verified"]=Py::Boolean(preview.fieldTriangleDistanceVerified);
         report["field_triangle_distance_bound"]=Py::Float(preview.fieldTriangleDistanceBound);
         report["field_triangles_checked"]=Py::Long(preview.fieldTrianglesChecked);

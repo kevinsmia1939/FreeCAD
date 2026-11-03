@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Opt-in transient cylinder preview; no global surface-distance certificate."""
+"""Opt-in transient cylinder preview with explicit distance/contact results."""
 import hashlib
 import FreeCAD as App
 
@@ -16,11 +16,12 @@ class CylinderView:
         for kind, name, default in (("App::PropertyInteger", "PreviewResolution", 16),
                                     ("App::PropertyColor", "SurfaceColor", (.65, .8, .9)),
                                     ("App::PropertyString", "PreviewState", "Empty"),
-                                    ("App::PropertyBool", "SurfaceDistanceVerified", False)):
+                                    ("App::PropertyBool", "SurfaceDistanceVerified", False),
+                                    ("App::PropertyLength", "SurfaceDistanceBound", 0.)):
             if name not in view.PropertiesList:
                 view.addProperty(kind, name, "Cylinder preview")
                 setattr(view, name, default)
-        for name in ("PreviewState", "SurfaceDistanceVerified"):
+        for name in ("PreviewState", "SurfaceDistanceVerified", "SurfaceDistanceBound"):
             view.setEditorMode(name, 1)
             view.setPropertyStatus(name, "Transient")
         self._root = coin.SoSeparator()
@@ -106,8 +107,9 @@ class CylinderView:
             self._content.addChild(pending)
             self._mesh, self._key, self._picked, self._elements = mesh, key, picked, elements
             self._surface_material = material
-            view.SurfaceDistanceVerified = False
-            view.PreviewState = "Preview (surface distance unverified)"
+            view.SurfaceDistanceVerified = mesh["surface_distance_verified"]
+            view.SurfaceDistanceBound = mesh["surface_distance_bound"]
+            view.PreviewState = "Verified preview" if view.SurfaceDistanceVerified else "Preview (surface distance unverified)"
         except Exception as error:
             self.clear()
             view.PreviewState = "Failed: " + str(error)
@@ -117,6 +119,7 @@ class CylinderView:
         self._picked, self._elements = {}, {}
         self._content.removeAllChildren()
         self._view.SurfaceDistanceVerified = False
+        self._view.SurfaceDistanceBound = 0.
 
     def updateData(self, _obj, prop):
         if prop in ("Geometry", "GeometryState"):

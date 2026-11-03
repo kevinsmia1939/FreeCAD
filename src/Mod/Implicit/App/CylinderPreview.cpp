@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "CylinderPreview.h"
 #include "CylinderBoundary.h"
+#include "PreviewContacts.h"
 #include <BRep_ImplicitTool.hxx>
 #include <BRep_TImplicitFace.hxx>
 #include <Geom_ImplicitGyroid.hxx>
@@ -600,6 +601,16 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     else if (result.sideDistanceReason.empty()) {
         result.sideDistanceReason = "Cylinder side chart or bidirectional distance budget unresolved";
     }
+    std::vector<std::array<float, 3>> contactPoints;
+    contactPoints.reserve(result.points.size());
+    for (const auto& p : result.points) {
+        contactPoints.push_back({float(p.x), float(p.y), float(p.z)});
+    }
+    const auto contacts = detail::checkPreviewContacts(contactPoints, result.triangles);
+    result.contactsVerified = contacts.verified;
+    result.contactPairs = contacts.pairs;
+    result.contactBoundsTests = contacts.boundsTests;
+    result.contactReason = contacts.reason;
     return result;
 }
 }  // namespace Implicit

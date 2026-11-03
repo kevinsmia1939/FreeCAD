@@ -68,7 +68,10 @@ for negative, tilted in ((False, False), (True, False), (False, True)):
     assert not coarse["sheet_reverse_distance_verified"]
     assert coarse["sheet_reverse_reason"]
     mesh = Implicit.cylinderPreview(obj, 6)
-    assert mesh["mesh_incidence_verified"] and not mesh["surface_distance_verified"]
+    assert mesh["mesh_incidence_verified"]
+    assert mesh["triangle_contacts_verified"], mesh["contact_reason"]
+    assert mesh["surface_distance_verified"]
+    assert 0 < mesh["surface_distance_bound"] <= .1
     assert set(mesh["native_faces"]) == {1, 2, 3}
     vertices = [App.Vector(*p) for p in mesh["points"]]
     volume = sum(vertices[a].dot(vertices[b].cross(vertices[c]))/6 for a, b, c in mesh["triangles"])
