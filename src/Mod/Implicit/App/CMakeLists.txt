@@ -26,6 +26,14 @@ if(FREECAD_OCCT_BUILD_DIR AND OCC_VERSION_STRING VERSION_GREATER_EQUAL 8.0.0)
     target_compile_definitions(Implicit PRIVATE IMPLICIT_WITH_NATIVE_GEOMETRY)
     target_include_directories(Implicit SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
     target_link_libraries(Implicit TKTopAlgo)
+    # Explicit native execution test; does not enter the normal application build.
+    add_executable(ImplicitCylinderWorkTests EXCLUDE_FROM_ALL ../Tests/CylinderWork.cpp)
+    target_include_directories(ImplicitCylinderWorkTests PRIVATE
+        ${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/src ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(ImplicitCylinderWorkTests SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
+    target_link_libraries(ImplicitCylinderWorkTests Implicit)
+    set_target_properties(ImplicitCylinderWorkTests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     if(NOT EXISTS "${OCC_INCLUDE_DIR}/BRep_ImplicitTool.hxx")
         message(FATAL_ERROR "Selected OCCT build lacks native implicit faces")
     endif()

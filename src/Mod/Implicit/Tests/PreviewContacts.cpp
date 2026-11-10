@@ -5,6 +5,12 @@
 using Points = std::vector<std::array<float,3>>;
 using Triangle = Implicit::detail::contact::Triangle;
 using Implicit::detail::checkPreviewContacts;
+struct Cancelled {};
+size_t checkpointCalls = 0, cancelAt = std::numeric_limits<size_t>::max();
+void checkpoint()
+{
+    if (++checkpointCalls >= cancelAt) throw Cancelled();
+}
 void require(bool valid, const char* message)
 {
     if (!valid) throw std::runtime_error(message);
@@ -59,6 +65,17 @@ int main()
         const Points fan {{0,0,0},{1,0,0},{0,1,0},{-1,0,0},{0,-1,0}};
         const std::vector<Triangle> triangles {{0,1,2},{0,2,3},{0,3,4}};
         require(checkPreviewContacts(fan,triangles).verified,"Valid fan refused");
+        const auto controlled=checkPreviewContacts(fan,triangles,20000000,checkpoint);
+        require(controlled.verified && checkpointCalls>10,"Contact checkpoints missing");
+        const size_t complete=checkpointCalls;
+        for (auto stop : {size_t(1),complete/2,complete}) {
+            checkpointCalls=0; cancelAt=stop;
+            bool aborted=false;
+            try { checkPreviewContacts(fan,triangles,20000000,checkpoint); }
+            catch (const Cancelled&) { aborted=true; }
+            require(aborted,"Contact cancellation returned a certificate");
+        }
+        require(checkPreviewContacts(fan,triangles).verified,"Contact cancellation changed source");
         const auto exhausted = checkPreviewContacts(fan,triangles,1);
         require(!exhausted.verified && exhausted.reason == "Contact work budget exhausted","Budget promoted");
         require(!checkPreviewContacts(fan,triangles,0).verified,"Zero budget promoted");

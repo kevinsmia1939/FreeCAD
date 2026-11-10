@@ -3,6 +3,7 @@
 #include <App/ComplexGeoData.h>
 #include <Base/Exception.h>
 #include <BRep_Tool.hxx>
+#include <BRepClass3d_ImplicitWork.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_BSplineCurve.hxx>
@@ -26,6 +27,7 @@ inline void cylinderBoundary(
     std::vector<std::vector<uint32_t>>* edgeSamples = nullptr
 )
 {
+    BRepClass3d_ImplicitWork::Checkpoint();
     using Map = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
     if (!std::isfinite(accuracy) || accuracy <= 0) {
         throw Base::ValueError("Invalid cylinder line deflection");
@@ -46,9 +48,11 @@ inline void cylinderBoundary(
         return static_cast<uint32_t>(points.size() - 1);
     };
     for (const auto& vertex : vertices) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         append(BRep_Tool::Pnt(TopoDS::Vertex(vertex)));
     }
     for (const auto& source : edges) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         const auto edge = TopoDS::Edge(source.Oriented(TopAbs_FORWARD));
         TopoDS_Vertex a, b;
         TopExp::Vertices(edge, a, b);
@@ -92,6 +96,7 @@ inline void cylinderBoundary(
                 throw Base::ValueError("Cylinder spline sampling budget");
             }
             for (int i = 2; i < spline->NbPoles(); ++i) {
+                BRepClass3d_ImplicitWork::Checkpoint();
                 interior.push_back(world(spline->Pole(i)));
             }
         }
@@ -107,6 +112,7 @@ inline void cylinderBoundary(
                 throw Base::ValueError("Cylinder circle sampling budget");
             }
             for (size_t i = 1; i < count; ++i) {
+                BRepClass3d_ImplicitWork::Checkpoint();
                 interior.push_back(
                     world(curve->Value(first + (last - first) * double(i) / double(count)))
                 );
@@ -121,6 +127,7 @@ inline void cylinderBoundary(
             sample.push_back(previous);
         }
         for (const auto& p : interior) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto index = append(p);
             segments.push_back({previous, index});
             previous = index;
@@ -138,17 +145,29 @@ inline void cylinderBoundary(
         throw Base::ValueError("Cylinder line index overflow");
     }
     const auto offset = static_cast<uint32_t>(output.size());
-    output.insert(output.end(), points.begin(), points.end());
-    for (const auto& line : segments) {
-        lines.push_back({line.I1 + offset, line.I2 + offset});
+    // Adjust only private staging buffers while cancellation is possible.
+    for (auto& line : segments) {
+        BRepClass3d_ImplicitWork::Checkpoint();
+        line.I1 += offset;
+        line.I2 += offset;
     }
     if (edgeSamples) {
         for (auto& sample : samples) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             for (auto& index : sample) {
+                BRepClass3d_ImplicitWork::Checkpoint();
                 index += offset;
             }
         }
-        *edgeSamples = std::move(samples);
+    }
+    output.reserve(output.size() + points.size());
+    lines.reserve(lines.size() + segments.size());
+    BRepClass3d_ImplicitWork::Checkpoint();
+    // No further callback or allocation after the last publication checkpoint.
+    output.insert(output.end(), points.begin(), points.end());
+    lines.insert(lines.end(), segments.begin(), segments.end());
+    if (edgeSamples) {
+        edgeSamples->swap(samples);
     }
 }
 }  // namespace Implicit::detail

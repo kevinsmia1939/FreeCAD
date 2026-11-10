@@ -2,6 +2,7 @@
 #include "CylinderPreview.h"
 #include "CylinderBoundary.h"
 #include "PreviewContacts.h"
+#include <BRepClass3d_ImplicitWork.hxx>
 #include <BRep_ImplicitTool.hxx>
 #include <BRep_TImplicitFace.hxx>
 #include <Geom_ImplicitGyroid.hxx>
@@ -13,7 +14,9 @@ namespace Implicit
 {
 CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsigned resolution)
 {
+    BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::Meshing);
     const auto require = [](bool ok, const char* message) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         if (!ok) {
             throw Base::ValueError(message);
         }
@@ -82,6 +85,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     uint32_t capSeam = 0, fieldSeam = sheet.front();
     bool found = false;
     for (size_t i = 1; i <= edges.Size(); ++i) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         if (!capEdges.Contains(edges.FindKey(i)) && !fieldEdges.Contains(edges.FindKey(i))) {
             const auto& seam = samples.at(size_t(i - 1));
             if (seam.front() == fieldSeam) {
@@ -100,10 +104,12 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     const auto order = [&](std::vector<uint32_t>& ring, uint32_t seam) {
         std::set<std::pair<uint32_t, uint32_t>> boundary;
         for (size_t i = 0; i < ring.size(); ++i) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             boundary.insert(std::minmax(ring[i], ring[(i + 1) % ring.size()]));
         }
         std::vector<std::pair<double, uint32_t>> sorted;
         for (auto index : ring) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto p = local(result.points.at(index));
             double u = std::fmod(std::atan2(p.Y(), p.X()) - s.AngleMinimum, turn);
             if (u < 0) {
@@ -118,11 +124,13 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         ring.clear();
         std::vector<double> angles;
         for (const auto& entry : sorted) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             angles.push_back(entry.first);
             ring.push_back(entry.second);
         }
         require(ring.size() >= 3 && ring.front() == seam, "Invalid cylinder preview winding");
         for (size_t i = 0; i < ring.size(); ++i) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             require(
                 boundary.contains(std::minmax(ring[i], ring[(i + 1) % ring.size()])),
                 "Cylinder preview angular reorder crossed a native edge"
@@ -172,6 +180,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     };
     const auto center = append(world(0, 0, capHeight));
     for (size_t i = 0; i < cap.size(); ++i) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         emit(center, cap[i], cap[(i + 1) % cap.size()], 1);
     }
     size_t ci = 0, fi = 0;
@@ -186,6 +195,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         emit(a.index, b.index, c.index, 2);
     };
     while (ci < cap.size() || fi < sheet.size()) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         const auto c = cap[ci % cap.size()], f = sheet[fi % sheet.size()];
         const SideChartVertex capVertex {c, capAngles[ci], capHeight};
         const SideChartVertex fieldVertex {f, fieldAngles[fi], local(result.points[f]).Z()};
@@ -215,6 +225,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         };
         require(value(low) < -reserve && value(high) > reserve, "Cylinder preview root bracket");
         for (int step = 0; step < 128 && high - low > rootWidth; ++step) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const double middle = low + (high - low) * .5, v = value(middle);
             if (v > reserve) {
                 high = middle;
@@ -253,8 +264,10 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     fieldChart[fieldCenter] = {0, 0};
     std::vector<uint32_t> previous;
     for (unsigned ring = 1; ring <= resolution; ++ring) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         std::vector<uint32_t> current;
         for (size_t j = 0; j < sheet.size(); ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto boundary = local(result.points[sheet[j]]);
             const double boundaryRadius = std::hypot(boundary.X(), boundary.Y());
             require(boundaryRadius > precision, "Cylinder preview boundary at axis");
@@ -273,6 +286,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
             fieldChart[current.back()] = {boundary.X() * factor, boundary.Y() * factor};
         }
         for (size_t j = 0; j < sheet.size(); ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const size_t next = (j + 1) % sheet.size();
             if (ring == 1) {
                 emit(fieldCenter, current[j], current[next], 3);
@@ -292,7 +306,9 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     std::map<std::pair<uint32_t, uint32_t>, Use> incidence;
     std::vector<bool> used(result.points.size(), false);
     for (const auto& triangle : result.triangles) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         for (size_t i = 0; i < 3; ++i) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto a = triangle[i], b = triangle[(i + 1) % 3];
             auto& use = incidence[std::minmax(a, b)];
             ++use.count;
@@ -301,6 +317,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         }
     }
     for (const auto& use : incidence) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         require(
             use.second.count == 2 && use.second.orientation == 0,
             "Open or inconsistently oriented cylinder preview"
@@ -316,7 +333,9 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         "Cylinder preview Euler mismatch"
     );
     for (size_t i = 0; i < result.triangles.size(); ++i) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         for (auto index : result.triangles[i]) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto& p = result.points[index];
             gp_Vec n;
             if (result.faces[i] == 1) {
@@ -336,6 +355,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         }
     }
     for (const auto& p : result.points) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         const Base::Vector3d upload(double(float(p.x)), double(float(p.y)), double(float(p.z)));
         const double displacement = (upload - p).Length();
         require(std::isfinite(displacement), "Cylinder preview float upload overflow");
@@ -345,6 +365,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         result.uploadBound < s.DistanceTolerance,
         "Cylinder preview upload displacement exceeds geometry tolerance"
     );
+    BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::Coverage);
     // Compare the actual uploaded fan to an ideal inscribed disk polygon with
     // the same indexed triangles. Barycentric correspondence bounds both
     // directions between the two fans by the largest vertex displacement.
@@ -358,6 +379,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     double capTurn = 0;
     bool capIntervals = true;
     for (size_t i = 0; i < cap.size(); ++i) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         const auto q = local(result.points[cap[i]]);
         const auto next = local(result.points[cap[(i + 1) % cap.size()]]);
         const double radial = std::hypot(q.X(), q.Y());
@@ -389,6 +411,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     result.fieldTriangleDistanceVerified = true;
     const double tolerance = s.DistanceTolerance;
     for (size_t t = 0; t < result.triangles.size(); ++t) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         if (result.faces[t] != 3) {
             continue;
         }
@@ -396,6 +419,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         std::array<gp_Vec, 3> radial;
         double maximumRadius = 0;
         for (size_t j = 0; j < 3; ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto& v = result.points[result.triangles[t][j]];
             p[j] = gp_Pnt(double(float(v.x)), double(float(v.y)), double(float(v.z)));
             const gp_Vec delta(s.Frame.Location(), p[j]);
@@ -408,6 +432,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         double displacement = precision, residual = 0, diameter = 0;
         gp_XYZ center(0, 0, 0);
         for (size_t j = 0; j < 3; ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             q[j] = p[j].Translated(radial[j] * (factor - 1));
             displacement = std::max(displacement, p[j].Distance(q[j]) + precision);
             residual = std::max(residual, std::abs(BRep_ImplicitTool::Value(primitive, q[j])));
@@ -415,6 +440,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         }
         double radius = precision;
         for (size_t j = 0; j < 3; ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             radius = std::max(radius, q[j].Distance(gp_Pnt(center)) + precision);
             diameter = std::max(diameter, q[j].Distance(q[(j + 1) % 3]));
         }
@@ -429,7 +455,9 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         // The six endpoints enclose a convex prism containing all axial root
         // witnesses. The source box and this full-cylinder mask are convex.
         for (size_t j = 0; j < 3 && verified; ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             for (double sign : {-1., 1.}) {
+                BRepClass3d_ImplicitWork::Checkpoint();
                 verified = verified && BRep_ImplicitTool::IsInDomain(
                     source.Source.Faces[2], q[j].Translated(axis * (sign * reach)));
             }
@@ -450,6 +478,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     double sheetTurn = 0, sheetSagitta = 0;
     bool sheetWinding = true;
     for (size_t i = 0; i < sheet.size(); ++i) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         const auto& a = fieldChart.at(sheet[i]);
         const auto& b = fieldChart.at(sheet[(i + 1) % sheet.size()]);
         double gap = std::atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]);
@@ -470,6 +499,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     }
     double maximumDisplacement = 0, maximumResidual = 0;
     for (size_t t = 0; t < result.triangles.size() && result.sheetReverseDistanceVerified; ++t) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         if (result.faces[t] != 3) {
             continue;
         }
@@ -477,6 +507,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         double displacement = precision, residual = 0, diameter = 0;
         bool inDomain = true;
         for (size_t j = 0; j < 3; ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const uint32_t index = result.triangles[t][j];
             const auto upload = uploaded(index);
             const auto xy = fieldChart.at(index);
@@ -487,6 +518,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
             inDomain = inDomain && BRep_ImplicitTool::IsInDomain(source.Source.Faces[2], reference[j]);
         }
         for (size_t j = 0; j < 3; ++j) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             diameter = std::max(diameter, reference[j].Distance(reference[(j + 1) % 3]));
         }
         ++result.sheetReverseTrianglesChecked;
@@ -534,6 +566,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     const auto checkAngles = [&](const std::vector<double>& angles) {
         bool valid = angles.front() == 0 && angles.back() == turn;
         for (size_t i = 1; i < angles.size(); ++i) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             valid = valid && angles[i] > angles[i - 1]
                 && angles[i] - angles[i - 1] < std::acos(-1.);
         }
@@ -546,8 +579,10 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     };
     double sideMeshBound = 0, sideBoundaryResidual = 0;
     for (const auto& triangle : sideChart) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         double perturbation = precision, lowAngle = turn, highAngle = 0;
         for (const auto& vertex : triangle) {
+            BRepClass3d_ImplicitWork::Checkpoint();
             const auto reference = cylinderPoint(vertex.angle, vertex.height);
             perturbation = std::max(perturbation, (uploaded(vertex.index) - reference).Length() + precision);
             lowAngle = std::min(lowAngle, vertex.angle);
@@ -558,6 +593,7 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
         ++result.sideTrianglesChecked;
     }
     for (size_t i = 0; i < sheet.size(); ++i) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         const double a = fieldAngles[i], b = fieldAngles[i + 1];
         const double ha = local(result.points[sheet[i]]).Z();
         const double hb = local(result.points[sheet[(i + 1) % sheet.size()]]).Z();
@@ -604,13 +640,17 @@ CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid& solid, unsig
     std::vector<std::array<float, 3>> contactPoints;
     contactPoints.reserve(result.points.size());
     for (const auto& p : result.points) {
+        BRepClass3d_ImplicitWork::Checkpoint();
         contactPoints.push_back({float(p.x), float(p.y), float(p.z)});
     }
-    const auto contacts = detail::checkPreviewContacts(contactPoints, result.triangles);
+    BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::ContactAudit);
+    const auto contacts = detail::checkPreviewContacts(
+        contactPoints, result.triangles, 20000000, BRepClass3d_ImplicitWork::Checkpoint);
     result.contactsVerified = contacts.verified;
     result.contactPairs = contacts.pairs;
     result.contactBoundsTests = contacts.boundsTests;
     result.contactReason = contacts.reason;
+    BRepClass3d_ImplicitWork::Checkpoint();
     return result;
 }
 }  // namespace Implicit

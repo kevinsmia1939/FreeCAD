@@ -145,8 +145,10 @@ inline bool pairAllowed(const Triangle& a, const Triangle& b, const std::vector<
 
 inline PreviewContacts checkPreviewContacts(const std::vector<std::array<float,3>>& points,
                                            const std::vector<contact::Triangle>& triangles,
-                                           size_t maximumBoundsTests = 20000000)
+                                           size_t maximumBoundsTests = 20000000,
+                                           void (*checkpoint)() = nullptr)
 {
+    if (checkpoint) checkpoint();
     PreviewContacts result;
     const auto fail = [&](const char* reason) { result.reason = reason; return result; };
     if (points.empty() || triangles.empty() || points.size() > 250000
@@ -155,6 +157,7 @@ inline PreviewContacts checkPreviewContacts(const std::vector<std::array<float,3
     std::vector<contact::Point> exact;
     exact.reserve(points.size());
     for (const auto& p : points) {
+        if (checkpoint) checkpoint();
         if (!std::all_of(p.begin(),p.end(),[](float v) { return std::isfinite(v); }))
             return fail("Nonfinite uploaded contact coordinate");
         exact.push_back({contact::coordinate(p[0]),contact::coordinate(p[1]),contact::coordinate(p[2])});
@@ -162,6 +165,7 @@ inline PreviewContacts checkPreviewContacts(const std::vector<std::array<float,3
     struct Box { std::array<float,3> low, high; size_t triangle; };
     std::vector<Box> boxes; boxes.reserve(triangles.size());
     for (size_t i = 0; i < triangles.size(); ++i) {
+        if (checkpoint) checkpoint();
         const auto& t = triangles[i];
         for (auto index : t) if (index >= points.size()) return fail("Invalid contact triangle index");
         if (contact::zero(contact::cross(contact::subtract(exact[t[1]],exact[t[0]]),
@@ -175,14 +179,18 @@ inline PreviewContacts checkPreviewContacts(const std::vector<std::array<float,3
         boxes.push_back(box);
     }
     // Inclusive AABBs: touching boxes must reach the exact predicates.
-    std::sort(boxes.begin(),boxes.end(),[](const Box& a, const Box& b) {
+    size_t comparisons = 0;
+    std::sort(boxes.begin(),boxes.end(),[&](const Box& a, const Box& b) {
+        if (checkpoint && (++comparisons % 1024 == 0)) checkpoint();
         return a.low[0] < b.low[0] || (a.low[0] == b.low[0] && a.triangle < b.triangle);
     });
     std::vector<size_t> active;
     for (size_t i = 0; i < boxes.size(); ++i) {
+        if (checkpoint) checkpoint();
         const auto& current = boxes[i];
         size_t retained = 0;
         for (auto j : active) {
+            if (checkpoint) checkpoint();
             if (++result.boundsTests > maximumBoundsTests) return fail("Contact work budget exhausted");
             const auto& previous = boxes[j];
             if (previous.high[0] < current.low[0]) continue;
@@ -196,6 +204,7 @@ inline PreviewContacts checkPreviewContacts(const std::vector<std::array<float,3
         active.resize(retained);
         active.push_back(i);
     }
+    if (checkpoint) checkpoint();
     result.verified = true;
     return result;
 }
