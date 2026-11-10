@@ -31,6 +31,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert not hasattr(obj, "Shape")
     obj.Geometry = ready["qualified_stored_solid_handle"]
     assert obj.GeometryState == "Ready"
+    assert native.classify_cylinder_material(obj.Geometry, (0,0,-.5))["mathematical_state"] == "IN"
     assert native.inspect_qualified_stored_cylinder_solid(obj.Geometry)["solid_validated"]
     source_record = native.dumps_cylinder_solid(obj.Geometry)
     snapshot = Implicit.nativeGeometry(obj)
@@ -219,6 +220,12 @@ with tempfile.TemporaryDirectory() as folder:
     doc.UndoMode = 1
     obj = doc.getObject("Cylinder")
     assert obj.GeometryState == "Unverified", obj.GeometryState
+    try:
+        native.classify_cylinder_material(obj.Geometry, (0,0,-.5))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("Unverified FCStd graph exposed material classification")
     assert obj.getSubObject("Face3") is None
     if App.GuiUp:
         assert obj.ViewObject.Proxy._mesh is None
@@ -248,16 +255,24 @@ with tempfile.TemporaryDirectory() as folder:
     doc.openTransaction("Requalify actual stored graph")
     obj.Geometry = qualified["qualified_stored_solid_handle"]
     doc.commitTransaction()
+    assert native.classify_cylinder_material(obj.Geometry, (0,0,-.5))["mathematical_state"] == "IN"
     assert obj.GeometryState == "Ready"
     if App.GuiUp:
         assert obj.ViewObject.Proxy._mesh is not None, obj.ViewObject.PreviewState
     doc.undo()
     assert obj.GeometryState == "Unverified"
+    try:
+        native.classify_cylinder_material(obj.Geometry, (0,0,-.5))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("Undo retained a qualified material-query owner")
     if App.GuiUp:
         assert obj.ViewObject.Proxy._mesh is None
     assert not native.inspect_stored_cylinder_solid(obj.Geometry)["solid_validated"]
     doc.redo()
     assert obj.GeometryState == "Ready"
+    assert native.classify_cylinder_material(obj.Geometry, (0,0,-.5))["mathematical_state"] == "IN"
     assert native.inspect_qualified_stored_cylinder_solid(obj.Geometry)["solid_validated"]
     App.closeDocument(doc.Name)
     assert snapshot.countSubElements("Vertex") == 3

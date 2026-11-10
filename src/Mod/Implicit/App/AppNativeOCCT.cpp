@@ -1675,11 +1675,26 @@ PyObject* classifyCylinderMaterial(PyObject* args)
     if (!PyArg_ParseTuple(args, "OO|d", &object, &query, &tolerance) || !point(query, p)) {
         return nullptr;
     }
-    const auto* geometry = getCylinderGeometryOwner(object);
-    if (!geometry) {
-        return nullptr;
+    BRepClass3d_ImplicitCylinder::MaterialPoint result;
+    if (PyCapsule_IsValid(object, storedCylinderGeometryName)) {
+        const auto* geometry = static_cast<const BRepClass3d_ImplicitCylinderIO::Geometry*>(
+            PyCapsule_GetPointer(object, storedCylinderGeometryName));
+        result = BRepClass3d_ImplicitCylinderIO::ClassifyMaterial(*geometry, p, tolerance);
     }
-    const auto result = BRepClass3d_ImplicitCylinder::ClassifyMaterial(*geometry, p, tolerance);
+    else if (PyCapsule_IsValid(object, qualifiedStoredCylinderName)) {
+        const auto* solid = static_cast<const BRepClass3d_ImplicitCylinderIO::Solid*>(
+            PyCapsule_GetPointer(object, qualifiedStoredCylinderName));
+        if (!solid->Verified) {
+            PyErr_SetString(PyExc_ValueError, "restored cylinder solid is not qualified");
+            return nullptr;
+        }
+        result = BRepClass3d_ImplicitCylinderIO::ClassifyMaterial(solid->Source, p, tolerance);
+    }
+    else {
+        const auto* geometry = getCylinderGeometryOwner(object);
+        if (!geometry) return nullptr;
+        result = BRepClass3d_ImplicitCylinder::ClassifyMaterial(*geometry, p, tolerance);
+    }
     const char* state = result.State == TopAbs_IN ? "IN" : result.State == TopAbs_OUT ? "OUT"
         : result.State == TopAbs_ON ? "ON" : "UNKNOWN";
     return Py_BuildValue("{s:s,s:d,s:d,s:d,s:O}", "mathematical_state", state,
@@ -3647,7 +3662,7 @@ PyMethodDef methods[] = {
     {"inspect_cylinder_shell_geometry", checked<inspectCylinderGeometry>, METH_VARARGS,
      "Inspect an owned native cylinder geometry result without rebuilding."},
     {"classify_cylinder_material", checked<classifyCylinderMaterial>, METH_VARARGS,
-     "Classify an owned cylinder material recipe with model-length distance bounds."},
+     "Classify qualified construction or restored cylinder material with spatial distance bounds."},
     {"bound_cylinder_material_volume", checked<cylinderMaterialVolume<false>>, METH_VARARGS,
      "Bound mathematical material volume by adaptive disk/fibre integration."},
     {"build_cylinder_solid", checked<cylinderMaterialVolume<true>>, METH_VARARGS,

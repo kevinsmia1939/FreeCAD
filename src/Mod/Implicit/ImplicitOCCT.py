@@ -225,7 +225,8 @@ def classify_cylinder_material(geometry_handle, point, point_tolerance=1.e-7):
     boundary_allowance_separated distinguishes clearance beyond the retained
     boundary approximation allowance. This does not invoke an OCCT solid
     classifier or qualify generic consumers. UNKNOWN is a supported result.
-    Qualified native cylinder solid handles are also accepted.
+    Qualified construction solids, freshly verified restored geometries and
+    qualified restored solids are accepted. Raw or failed restored owners refuse.
     """
     return _classify_cylinder_material(geometry_handle, point, point_tolerance)
 

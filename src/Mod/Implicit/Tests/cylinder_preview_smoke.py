@@ -60,6 +60,13 @@ for negative, tilted in ((False, False), (True, False), (False, True)):
     doc = App.newDocument("PreviewSigns")
     obj = doc.addObject("Implicit::NativeCylinderFeature", "Cylinder")
     obj.Geometry = solid["qualified_stored_solid_handle"]
+    for height in (-1., .9):
+        query = world(0, 0, height)
+        value = native.value(source, tuple(query))
+        expected = "IN" if (value < 0) == negative else "OUT"
+        assert native.classify_cylinder_material(obj.Geometry, tuple(query))["mathematical_state"] == expected
+    query = world(0, 0, root_at(0, 0))
+    assert native.classify_cylinder_material(obj.Geometry, tuple(query))["mathematical_state"] == "ON"
     before = native.dumps_cylinder_solid(obj.Geometry)
     coarse = Implicit.cylinderPreview(obj, 2)
     assert not coarse["field_triangle_distance_verified"]

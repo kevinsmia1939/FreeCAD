@@ -60,6 +60,30 @@ for negative in (True, False):
     qualified_handle = qualified["qualified_stored_solid_handle"]
     qualified["solid_validated"] = False
     assert native.inspect_qualified_stored_cylinder_solid(qualified_handle)["solid_validated"]
+    query_record = native.dumps_cylinder_solid(qualified_handle)
+    root = math.asin(.21)*10/(2*math.pi)
+    queries = (((0,0,-.5), "IN" if negative else "OUT"),
+               ((0,0,.8), "OUT" if negative else "IN"), ((0,0,root), "ON"),
+               ((0,0,-1.7), "ON" if negative else "OUT"),
+               ((0,0,1.3), "OUT" if negative else "ON"), ((2,0,0), "OUT"))
+    for owner in (geometry["stored_geometry_handle"], qualified_handle):
+        for point, state in queries:
+            report = native.classify_cylinder_material(owner, point)
+            assert report["mathematical_state"] == state, (point, report)
+            baseline = native.classify_cylinder_material(solid["solid_handle"], point)
+            for key in ("distance_lower_bound", "distance_upper_bound", "field_value_at_domain_projection"):
+                assert abs(report[key]-baseline[key]) < 1.e-10, (key, report, baseline)
+        margin = native.classify_cylinder_material(owner, (0,0,root+.05))
+        tolerance = (margin["distance_lower_bound"]+margin["distance_upper_bound"])/2
+        assert native.classify_cylinder_material(owner, (0,0,root+.05), tolerance)["mathematical_state"] == "UNKNOWN"
+        for point, tolerance in (((0,0,0), 0), ((float("nan"),0,0), 1.e-7)):
+            try:
+                native.classify_cylinder_material(owner, point, tolerance)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Invalid restored material query accepted")
+    assert native.dumps_cylinder_solid(qualified_handle) == query_record
     roundtrip = native.loads_cylinder_solid(native.dumps_cylinder_solid(qualified_handle))
     assert roundtrip["topology_validated"] and not roundtrip["solid_validated"]
     assert not roundtrip["geometry_verified"] and not roundtrip["volume_verified"]
@@ -72,6 +96,12 @@ for negative in (True, False):
     coarse = native.qualify_stored_cylinder_solid(geometry["stored_geometry_handle"], volume_tolerance=100)
     assert coarse["volume_verified"] and not coarse["solid_validated"]
     for owner in (failed["stored_geometry_handle"], refused["qualified_stored_solid_handle"]):
+        try:
+            native.classify_cylinder_material(owner, (0,0,0))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Failed restored owner accepted for material query")
         try:
             native.bound_stored_cylinder_volume(owner)
         except ValueError:
