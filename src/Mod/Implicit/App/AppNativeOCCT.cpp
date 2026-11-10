@@ -2883,7 +2883,7 @@ PyObject* takeSolidJob(PyObject* args)
 {
     const auto job = readSolidJob(args);
     if (!job) { return nullptr; }
-    if (job->isSurfaceJob() || job->isBoundaryJob()) {
+    if (job->isSurfaceJob() || job->isBoundaryJob() || job->isCylinderJob()) {
         PyErr_SetString(PyExc_TypeError, "expected a solid-construction job");
         return nullptr;
     }

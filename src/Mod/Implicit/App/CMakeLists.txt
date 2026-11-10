@@ -22,10 +22,21 @@ add_library(Implicit SHARED ${Implicit_SRCS})
 
 # Never build/load native OCCT 8 face code against the OCCT 7 compatibility ABI.
 if(FREECAD_OCCT_BUILD_DIR AND OCC_VERSION_STRING VERSION_GREATER_EQUAL 8.0.0)
-    target_sources(Implicit PRIVATE NativeGeometry.h NativeGeometry.cpp CylinderGeometry.h CylinderGeometry.cpp CylinderBoundary.h CylinderPreview.h CylinderPreview.cpp PreviewContacts.h)
+    target_sources(Implicit PRIVATE NativeGeometry.h NativeGeometry.cpp CylinderGeometry.h CylinderGeometry.cpp CylinderBoundary.h)
     target_compile_definitions(Implicit PRIVATE IMPLICIT_WITH_NATIVE_GEOMETRY)
     target_include_directories(Implicit SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
-    target_link_libraries(Implicit TKTopAlgo)
+    find_package(Threads REQUIRED)
+    add_library(ImplicitNativeWork SHARED NativeSolidJob.cpp NativeSolidJob.h
+        CheckedDisplay.cpp CheckedDisplay.h CylinderPreview.cpp CylinderPreview.h
+        PreviewContacts.h NativeWorkExport.h)
+    target_include_directories(ImplicitNativeWork PUBLIC
+        ${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/src ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(ImplicitNativeWork SYSTEM PUBLIC ${OCC_INCLUDE_DIR})
+    target_link_libraries(ImplicitNativeWork PUBLIC FreeCADApp TKTopAlgo TKMesh Threads::Threads)
+    target_compile_warn_error(ImplicitNativeWork)
+    set_bin_dir(ImplicitNativeWork)
+    install(TARGETS ImplicitNativeWork DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    target_link_libraries(Implicit ImplicitNativeWork)
     # Explicit native execution test; does not enter the normal application build.
     add_executable(ImplicitCylinderWorkTests EXCLUDE_FROM_ALL ../Tests/CylinderWork.cpp)
     target_include_directories(ImplicitCylinderWorkTests PRIVATE
@@ -37,11 +48,9 @@ if(FREECAD_OCCT_BUILD_DIR AND OCC_VERSION_STRING VERSION_GREATER_EQUAL 8.0.0)
     if(NOT EXISTS "${OCC_INCLUDE_DIR}/BRep_ImplicitTool.hxx")
         message(FATAL_ERROR "Selected OCCT build lacks native implicit faces")
     endif()
-    add_library(_ImplicitOCCT SHARED AppNativeOCCT.cpp NativeSolidJob.cpp NativeSolidJob.h
-        CheckedDisplay.cpp CheckedDisplay.h)
-    find_package(Threads REQUIRED)
+    add_library(_ImplicitOCCT SHARED AppNativeOCCT.cpp)
     target_include_directories(_ImplicitOCCT SYSTEM PRIVATE ${OCC_INCLUDE_DIR})
-    target_link_libraries(_ImplicitOCCT PRIVATE TKTopAlgo TKMesh Python3::Python Threads::Threads)
+    target_link_libraries(_ImplicitOCCT PRIVATE ImplicitNativeWork Python3::Python)
     target_compile_warn_error(_ImplicitOCCT)
     set_bin_dir(_ImplicitOCCT)
     set_python_prefix_suffix(_ImplicitOCCT)

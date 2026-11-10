@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #pragma once
 #include "CylinderGeometry.h"
+#include "NativeWorkExport.h"
 #include <array>
 #include <string>
 namespace Implicit
@@ -42,5 +43,5 @@ struct CylinderPreview
     }
 };
 // Transient preview with explicit distance/contact qualification results.
-CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);
+ImplicitNativeWorkExport CylinderPreview buildCylinderPreview(const CylinderGeometry::Solid&, unsigned resolution);
 }  // namespace Implicit

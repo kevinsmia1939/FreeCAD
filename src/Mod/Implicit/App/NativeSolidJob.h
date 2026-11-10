@@ -4,6 +4,7 @@
 #include <BRepClass3d_ImplicitWork.hxx>
 #include <BRepMesh_ImplicitBoundary.hxx>
 #include "CheckedDisplay.h"
+#include "CylinderPreview.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -25,6 +26,11 @@ struct NativeSurfaceRequest
     std::size_t spatial = 2000000, patches = 1000000, pairs = 2000000, broad = 50000000;
 };
 // No Python, document, view-provider or shared mutable OCCT objects enter a job.
+struct NativeCylinderRequest
+{
+    std::string record;
+    unsigned resolution = 16;
+};
 struct NativeSolidRequest
 {
     std::string boundary;
@@ -34,6 +40,7 @@ struct NativeSolidRequest
     std::size_t geometryCells = 2000000, segments = 8000000;
     std::optional<NativeSurfaceRequest> display;
     std::optional<NativeBoundaryRequest> tracing;
+    std::optional<NativeCylinderRequest> cylinder;
 };
 
 struct NativeSolidResult
@@ -45,9 +52,11 @@ struct NativeSolidResult
     std::unique_ptr<BRepClass3d_ImplicitBox::Boundary> surfaceSource;
     std::optional<CheckedDisplay> checks;
     std::unique_ptr<BRepClass3d_ImplicitBox::Boundary> preparedBoundary;
+    std::unique_ptr<BRepClass3d_ImplicitCylinderIO::Solid> cylinder;
+    std::optional<CylinderPreview> cylinderPreview;
 };
 
-class NativeSolidJob: public BRepClass3d_ImplicitWork::Control
+class ImplicitNativeWorkExport NativeSolidJob: public BRepClass3d_ImplicitWork::Control
 {
 public:
     enum class State { Queued, Running, Ready, Failed, Cancelled, Consumed };
@@ -68,11 +77,13 @@ public:
     void run();
     bool isSurfaceJob() const { return surfaceJob; }
     bool isBoundaryJob() const { return boundaryJob; }
+    bool isCylinderJob() const { return cylinderJob; }
 
 private:
     NativeSolidRequest request;
     const bool surfaceJob;
     const bool boundaryJob;
+    const bool cylinderJob;
     std::atomic_bool cancelled {false};
     mutable std::atomic_size_t checkpoints {0};
     std::atomic<BRepClass3d_ImplicitWork::Phase> phase {BRepClass3d_ImplicitWork::Phase::Copying};
@@ -84,5 +95,5 @@ private:
 
 // One worker and at most one additional outstanding request bound CPU/memory.
 // The executor cancels and joins its worker at shutdown; jobs never detach.
-std::shared_ptr<NativeSolidJob> submitNativeSolid(NativeSolidRequest request);
+ImplicitNativeWorkExport std::shared_ptr<NativeSolidJob> submitNativeSolid(NativeSolidRequest request);
 }

@@ -17,7 +17,7 @@ using namespace Implicit;
 
 NativeSolidJob::NativeSolidJob(NativeSolidRequest input)
     : request(std::move(input)), surfaceJob(request.display.has_value()),
-      boundaryJob(request.tracing.has_value()) {}
+      boundaryJob(request.tracing.has_value()), cylinderJob(request.cylinder.has_value()) {}
 
 bool NativeSolidJob::IsCancelled() const
 {
@@ -34,7 +34,7 @@ void NativeSolidJob::cancel()
 {
     cancelled.store(true, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex);
-    if (state == State::Queued) { request.boundary.clear(); request.tracing.reset(); }
+    if (state == State::Queued) { request.boundary.clear(); request.tracing.reset(); request.cylinder.reset(); }
     if (state == State::Queued || state == State::Ready) {
         result.reset();
         state = State::Cancelled;
@@ -71,64 +71,80 @@ void NativeSolidJob::run()
     try {
         BRepClass3d_ImplicitWork::Scope scope(*this);
         BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::Copying);
-        BRepClass3d_ImplicitBox::Boundary boundary;
-        if (request.tracing) {
-            const auto& tracing = *request.tracing;
-            TopoDS_Face field;
-            std::istringstream fieldInput(tracing.field);
-            BRep_ImplicitIO::Read(fieldInput, field);
-            TopoDS_Shape box;
-            std::istringstream boxInput(tracing.box);
-            BRepTools::Read(box, boxInput, BRep_Builder());
-            if (boxInput.fail() || box.IsNull()) {
-                throw std::runtime_error("Invalid conventional box B-Rep snapshot");
-            }
-            boxInput >> std::ws;
-            if (!boxInput.eof()) { throw std::runtime_error("Trailing conventional box snapshot data"); }
-            BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::Topology);
-            using Ops = BRepClass3d_ImplicitBox;
-            boundary = Ops::Build(field, box,
-                tracing.common ? Ops::Operation::Common : Ops::Operation::BoxMinusField,
-                request.tolerance, tracing.cells,
-                tracing.regularized ? Ops::CornerPolicy::Regularized : Ops::CornerPolicy::Reject);
-        }
-        else {
-            std::istringstream input(request.boundary);
-            BRepClass3d_ImplicitBoxIO::Read(input, boundary);
-        }
         auto output = std::make_unique<NativeSolidResult>();
-        if (request.tracing) {
-            output->preparedBoundary = std::make_unique<BRepClass3d_ImplicitBox::Boundary>(std::move(boundary));
-        }
-        else if (request.display) {
-            const auto& display = *request.display;
-            output->surfaceSource = std::make_unique<BRepClass3d_ImplicitBox::Boundary>(std::move(boundary));
-            output->surface = BRepMesh_ImplicitBoundary::Tessellate(*output->surfaceSource,
-                request.tolerance, display.cells, display.nodes, display.triangles);
-            if (display.checked) {
-                output->checks = checkDisplay(*output->surfaceSource, *output->surface,
-                    request.tolerance, display.depth, display.spatial, display.patches,
-                    display.pairs, display.broad);
-            }
+        if (request.cylinder) {
+            using IO = BRepClass3d_ImplicitCylinderIO;
+            IO::StoredSolid stored;
+            std::istringstream input(request.cylinder->record);
+            IO::Read(input, stored);
+            BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::Geometry);
+            auto geometry = IO::CheckGeometry(stored);
+            if (!geometry.Verified) throw std::runtime_error(geometry.Boundary.Reason);
+            BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::SolidAssembly);
+            output->cylinder = std::make_unique<IO::Solid>(
+                IO::QualifySolid(geometry, BRepClass3d_ImplicitCylinder::VolumeSettings()));
+            if (!output->cylinder->Verified) throw std::runtime_error(output->cylinder->Reason);
+            output->cylinderPreview = buildCylinderPreview(*output->cylinder,request.cylinder->resolution);
         }
         else {
-            output->solid = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>(
-                BRepClass3d_ImplicitBox::BuildNativeSolids(boundary, request.tolerance,
-                    request.resolution, request.depth, request.cells, request.tests, request.separators,
-                    request.geometryCells, request.segments,
-                    request.geometryDepth == -1 ? request.depth : request.geometryDepth));
-            if (!output->solid->Constructed || !output->solid->Validated) {
-                throw std::runtime_error(output->solid->Reason);
-            }
-            BRepClass3d_ImplicitWork::Checkpoint();
-            const auto& parts = output->solid->Boundary.FaceComponents;
-            if (std::any_of(parts.begin(), parts.end(), [](int component) { return component >= 0; })) {
-                try {
-                    output->surface = BRepMesh_ImplicitBoundary::Tessellate(output->solid->Boundary.Source, .1);
+            BRepClass3d_ImplicitBox::Boundary boundary;
+            if (request.tracing) {
+                const auto& tracing = *request.tracing;
+                TopoDS_Face field;
+                std::istringstream fieldInput(tracing.field);
+                BRep_ImplicitIO::Read(fieldInput, field);
+                TopoDS_Shape box;
+                std::istringstream boxInput(tracing.box);
+                BRepTools::Read(box, boxInput, BRep_Builder());
+                if (boxInput.fail() || box.IsNull()) {
+                    throw std::runtime_error("Invalid conventional box B-Rep snapshot");
                 }
-                catch (const Standard_AbortiveTransaction&) { throw; }
-                catch (const Standard_Failure& failure) {
-                    output->surfaceError = failure.what();
+                boxInput >> std::ws;
+                if (!boxInput.eof()) { throw std::runtime_error("Trailing conventional box snapshot data"); }
+                BRepClass3d_ImplicitWork::EnterPhase(BRepClass3d_ImplicitWork::Phase::Topology);
+                using Ops = BRepClass3d_ImplicitBox;
+                boundary = Ops::Build(field, box,
+                    tracing.common ? Ops::Operation::Common : Ops::Operation::BoxMinusField,
+                    request.tolerance, tracing.cells,
+                    tracing.regularized ? Ops::CornerPolicy::Regularized : Ops::CornerPolicy::Reject);
+            }
+            else {
+                std::istringstream input(request.boundary);
+                BRepClass3d_ImplicitBoxIO::Read(input, boundary);
+            }
+            if (request.tracing) {
+                output->preparedBoundary = std::make_unique<BRepClass3d_ImplicitBox::Boundary>(std::move(boundary));
+            }
+            else if (request.display) {
+                const auto& display = *request.display;
+                output->surfaceSource = std::make_unique<BRepClass3d_ImplicitBox::Boundary>(std::move(boundary));
+                output->surface = BRepMesh_ImplicitBoundary::Tessellate(*output->surfaceSource,
+                    request.tolerance, display.cells, display.nodes, display.triangles);
+                if (display.checked) {
+                    output->checks = checkDisplay(*output->surfaceSource, *output->surface,
+                        request.tolerance, display.depth, display.spatial, display.patches,
+                        display.pairs, display.broad);
+                }
+            }
+            else {
+                output->solid = std::make_unique<BRepClass3d_ImplicitBox::NativeSolids>(
+                    BRepClass3d_ImplicitBox::BuildNativeSolids(boundary, request.tolerance,
+                        request.resolution, request.depth, request.cells, request.tests, request.separators,
+                        request.geometryCells, request.segments,
+                        request.geometryDepth == -1 ? request.depth : request.geometryDepth));
+                if (!output->solid->Constructed || !output->solid->Validated) {
+                    throw std::runtime_error(output->solid->Reason);
+                }
+                BRepClass3d_ImplicitWork::Checkpoint();
+                const auto& parts = output->solid->Boundary.FaceComponents;
+                if (std::any_of(parts.begin(), parts.end(), [](int component) { return component >= 0; })) {
+                    try {
+                        output->surface = BRepMesh_ImplicitBoundary::Tessellate(output->solid->Boundary.Source, .1);
+                    }
+                    catch (const Standard_AbortiveTransaction&) { throw; }
+                    catch (const Standard_Failure& failure) {
+                        output->surfaceError = failure.what();
+                    }
                 }
             }
         }
@@ -164,6 +180,7 @@ void NativeSolidJob::run()
     }
     request.boundary.clear();
     request.tracing.reset();
+    request.cylinder.reset();
 }
 
 namespace
@@ -185,7 +202,16 @@ public:
     }
     std::shared_ptr<NativeSolidJob> submit(NativeSolidRequest request)
     {
+        if (request.cylinder && (request.cylinder->record.empty() || request.cylinder->record.size()>16*1024*1024
+            || request.cylinder->resolution<2 || request.cylinder->resolution>64 || request.display || request.tracing))
+            throw std::runtime_error("Invalid cylinder worker request");
         std::lock_guard<std::mutex> lock(mutex);
+        // Presentation work yields its slot to model builds. Existing box job
+        // scheduling remains unchanged; only new cylinder previews are preempted.
+        if (!request.cylinder && !request.display) {
+            if (active && active->isCylinderJob()) active->cancel();
+            for (const auto& job : queue) if (job->isCylinderJob()) job->cancel();
+        }
         queue.erase(std::remove_if(queue.begin(), queue.end(), [](const auto& job) {
             return job->status().state == NativeSolidJob::State::Cancelled;
         }), queue.end());

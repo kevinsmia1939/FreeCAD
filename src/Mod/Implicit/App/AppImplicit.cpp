@@ -16,6 +16,7 @@
 # include "NativeGeometry.h"
 # include "CylinderGeometry.h"
 # include "CylinderPreview.h"
+# include "NativeSolidJob.h"
 # include <App/ComplexGeoDataPy.h>
 #endif
 
@@ -24,6 +25,21 @@ namespace Implicit
 
 namespace
 {
+
+#ifdef IMPLICIT_WITH_NATIVE_GEOMETRY
+constexpr const char* cylinderJobName = "ImplicitOCCT.NativeSolidJob.v1";
+constexpr const char* cylinderSolidName = "ImplicitOCCT.QualifiedStoredCylinder.v1";
+using CylinderJobPtr = std::shared_ptr<NativeSolidJob>;
+void deleteCylinderJob(PyObject* capsule)
+{
+    auto* owner = static_cast<CylinderJobPtr*>(PyCapsule_GetPointer(capsule,cylinderJobName));
+    if (owner) { (*owner)->cancel(); delete owner; }
+}
+void deleteCylinderSolid(PyObject* capsule)
+{
+    delete static_cast<BRepClass3d_ImplicitCylinderIO::Solid*>(PyCapsule_GetPointer(capsule,cylinderSolidName));
+}
+#endif
 
 constexpr const char* cancellationName = "Implicit.CancellationToken";
 
@@ -96,7 +112,11 @@ public:
             "nativeGeometry(feature) -> owned native ComplexGeoData snapshot; local coordinates"
         );
         add_varargs_method("cylinderPreview", &Module::cylinderPreview,
-            "cylinderPreview(feature, resolution=16) -> conforming transient preview; surface distance unverified");
+            "cylinderPreview(feature, resolution=16) -> transient preview with distance/contact results");
+        add_varargs_method("submitCylinderJob", &Module::submitCylinderJob,
+            "submitCylinderJob(featureOrRecord, resolution=16) -> shared native job handle");
+        add_varargs_method("takeCylinderJob", &Module::takeCylinderJob,
+            "takeCylinderJob(job) -> private qualified geometry, preview and input fingerprint");
         add_varargs_method(
             "classifyNative",
             &Module::classifyNative,
@@ -303,6 +323,10 @@ private:
         try { preview=buildCylinderPreview(*geometry->qualified,unsigned(resolution)); }
         catch (const Base::Exception& error) { throw Py::ValueError(error.what()); }
         catch (const Standard_Failure& error) { throw Py::RuntimeError(error.what()); }
+        return cylinderPreviewReport(preview,geometry->qualified->Source.Boundary.Bound);
+    }
+    Py::Object cylinderPreviewReport(const CylinderPreview& preview, double boundaryAllowance)
+    {
         Py::Dict report;
         Py::List points,triangles,faces,normals,edges;
         for (const auto& point:preview.points) points.append(vectorToPython(point));
@@ -348,8 +372,62 @@ private:
         report["curve_deflection"]=Py::Float(preview.curveDeflection);
         report["root_point_bound"]=Py::Float(preview.rootPointBound);
         report["upload_bound"]=Py::Float(preview.uploadBound);
-        report["source_boundary_allowance"]=Py::Float(geometry->qualified->Source.Boundary.Bound);
+        report["source_boundary_allowance"]=Py::Float(boundaryAllowance);
         report["root_tests"]=Py::Long(preview.rootTests);
+        return report;
+    }
+    Py::Object submitCylinderJob(const Py::Tuple& args)
+    {
+        PyObject* source=nullptr; int resolution=16;
+        if (!PyArg_ParseTuple(args.ptr(),"O|i",&source,&resolution)) throw Py::Exception();
+        if (resolution<2 || resolution>64) throw Py::ValueError("Cylinder preview resolution must be 2..64");
+        NativeCylinderRequest cylinder;
+        cylinder.resolution=unsigned(resolution);
+        if (PyUnicode_Check(source)) {
+            Py_ssize_t length=0; const char* text=PyUnicode_AsUTF8AndSize(source,&length);
+            if (!text) throw Py::Exception();
+            if (length<=0 || length>16*1024*1024) throw Py::ValueError("Invalid cylinder record size");
+            cylinder.record.assign(text,size_t(length));
+        }
+        else {
+            if (!PyObject_TypeCheck(source,&App::DocumentObjectPy::Type))
+                throw Py::TypeError("Expected cylinder document object or explicit graph record");
+            auto* object=static_cast<App::DocumentObjectPy*>(source)->getDocumentObjectPtr();
+            auto* property=dynamic_cast<PropertyNativeCylinderGeometry*>(object->getPropertyByName("Geometry"));
+            if (!property) throw Py::TypeError("Expected cylinder geometry property");
+            const auto* geometry=static_cast<const CylinderGeometry*>(property->getComplexData());
+            cylinder.record=geometry->record;
+            if (cylinder.record.empty()) throw Py::ValueError("Cylinder geometry is empty");
+        }
+        NativeSolidRequest request; request.cylinder=std::move(cylinder);
+        try {
+            auto owner=std::make_unique<CylinderJobPtr>(submitNativeSolid(std::move(request)));
+            PyObject* capsule=PyCapsule_New(owner.get(),cylinderJobName,deleteCylinderJob);
+            if (!capsule) { (*owner)->cancel(); throw Py::Exception(); }
+            owner.release(); return Py::Object(capsule,true);
+        }
+        catch (const std::exception& error) { throw Py::RuntimeError(error.what()); }
+    }
+    Py::Object takeCylinderJob(const Py::Tuple& args)
+    {
+        PyObject* capsule=nullptr;
+        if (!PyArg_ParseTuple(args.ptr(),"O",&capsule)) throw Py::Exception();
+        if (!PyCapsule_IsValid(capsule,cylinderJobName)) throw Py::TypeError("Expected native cylinder job handle");
+        const auto job=*static_cast<CylinderJobPtr*>(PyCapsule_GetPointer(capsule,cylinderJobName));
+        if (!job->isCylinderJob()) throw Py::TypeError("Expected cylinder requalification/preview job");
+        std::unique_ptr<NativeSolidResult> data;
+        try { data=job->take(); }
+        catch (const std::exception& error) { throw Py::RuntimeError(error.what()); }
+        if (!data->cylinder || !data->cylinder->Verified || !data->cylinderPreview)
+            throw Py::RuntimeError("Cylinder job has no qualified result");
+        Py::Dict report;
+        report["input_record"]=Py::String(data->request.cylinder->record);
+        report["resolution"]=Py::Long(static_cast<unsigned long>(data->request.cylinder->resolution));
+        report["preview"]=cylinderPreviewReport(*data->cylinderPreview,data->cylinder->Source.Boundary.Bound);
+        PyObject* owner=PyCapsule_New(data->cylinder.get(),cylinderSolidName,deleteCylinderSolid);
+        if (!owner) throw Py::Exception();
+        data->cylinder.release();
+        report["geometry_handle"]=Py::Object(owner,true);
         return report;
     }
     Py::Object nativeGeometry(const Py::Tuple& args)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #pragma once
+#include "NativeWorkExport.h"
 #include <BRepClass3d_ImplicitBox.hxx>
 #include <BRepMesh_ImplicitBoundary.hxx>
 #include <vector>
@@ -19,7 +20,7 @@ struct CheckedDisplay
 // the binary32 upload values and its field bound includes the upload displacement.
 // Coverage/solid proof flags on the candidate remain unchanged. On failure the
 // caller must discard the candidate; no partial report is returned.
-CheckedDisplay checkDisplay(const BRepClass3d_ImplicitBox::Boundary& source,
+ImplicitNativeWorkExport CheckedDisplay checkDisplay(const BRepClass3d_ImplicitBox::Boundary& source,
     BRepMesh_ImplicitBoundary::Result& mesh, double tolerance, int depth = 14,
     std::size_t spatial = 2000000, std::size_t patches = 1000000,
     std::size_t pairs = 2000000, std::size_t broad = 50000000);
